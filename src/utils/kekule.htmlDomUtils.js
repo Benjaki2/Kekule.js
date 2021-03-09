@@ -724,7 +724,10 @@ Kekule.HtmlElementUtils = {
 	 * @returns {Hash} A combination of {width, height}, in px.
 	 */
 	getElemClientDimension: function(elem)
+
+
 	{
+		if(!elem)	return {'width': 264, 'height': 264};
 		return {'width': elem.clientWidth, 'height': elem.clientHeight};
 	},
 	/**

@@ -37,6 +37,10 @@ Kekule.StructureComparationLevel = {
 	DEFAULT: 4
 };
 
+Kekule.globalOptions.add('structure', {
+	defaultBondLength2D: 0.8,  // a default C-C bond length for generating 2D coordinates of new structures
+	defaultBondLength3D: 1.5  // a default C-C bond length for generating 3D coordinates of new structures
+});
 /*
  * Default options to compare chem structures.
  * @object
@@ -56,6 +60,25 @@ Kekule.globalOptions.add('algorithm.structureClean', {
 		'hangingChemConnector': true
 	}
 });
+
+// The target atom element that should be applied implicit H estimation.
+// Defaultly all elements should be applied. If some need to be excluded, you need to
+// explicitly set its value to false.
+Kekule.globalOptions.add('structure.implicitHydrogenEstimationStrategy', {
+	targetElementCategories: {
+
+	},
+	targetElements: {
+
+	},
+	targetOrphanAtomElementCategories: {
+
+	},
+	targetOrphanAtomElements: {
+
+	}
+});
+Kekule.globalOptions.structure.implicitHydrogenEstimationStrategy.targetOrphanAtomElementCategories[Kekule.ElementCategory.METAL] = false;
 
 // extend method to Kekule.ObjComparer
 Kekule.ObjComparer.compareStructure = function(obj1, obj2, options)
@@ -640,11 +663,33 @@ Kekule.ChemStructureObject = Class.create(Kekule.ChemObject,
 		return result;
 	},
 	/**
+	 * Filter out connectors.
+	 * @param {Function} filter A filter function with param (connector, connectorIndex), returning true to include this connector in result set.
+	 * @returns {Array}
+	 */
+	filterConnector: function(filter)
+	{
+		var result = [];
+		for (var i = 0, l = this.getLinkedConnectorCount(); i < l; ++i)
+		{
+			var connector = this.getLinkedConnectorAt(i);
+			if (filter(connector))
+				Kekule.ArrayUtils.pushUnique(result, connector);
+		}
+		return result;
+	},
+	/**
 	 * Returns connectors that connected to a non hydrogen node.
 	 * @returns {Array}
 	 */
 	getLinkedNonHydrogenConnectors: function()
 	{
+		var self = this;
+		return this.filterConnector(function(connector){
+			var objs = self.getLinkedObjsOnConnector(connector);
+			return (objs.length > 1) || !(objs[0].isHydrogenAtom && objs[0].isHydrogenAtom());
+		});
+		/*
 		var result = [];
 		for (var i = 0, l = this.getLinkedConnectorCount(); i < l; ++i)
 		{
@@ -653,6 +698,19 @@ Kekule.ChemStructureObject = Class.create(Kekule.ChemObject,
 				Kekule.ArrayUtils.pushUnique(result, connector);
 		}
 		return result;
+		*/
+	},
+	/**
+	 * Returns connectors that connected to a concrete hydrogen node.
+	 * @returns {Array}
+	 */
+	getLinkedHydrogenConnectors: function()
+	{
+		var self = this;
+		return this.filterConnector(function(connector){
+			var objs = self.getLinkedObjsOnConnector(connector);
+			return (objs.length === 1) && (objs[0].isHydrogenAtom && objs[0].isHydrogenAtom());
+		});
 	},
 	/**
 	 * Returns linked objects except hydrogen atoms.
@@ -676,8 +734,9 @@ Kekule.ChemStructureObject = Class.create(Kekule.ChemObject,
 		return result;
 	},
 	/**
-	 * Returns linked hydrogen atoms.
+	 * Returns linked hydrogen atoms with explicit bonds.
 	 * @returns {Array}
+	 * @deprecated
 	 */
 	getLinkedHydrogenAtoms: function()
 	{
@@ -685,14 +744,60 @@ Kekule.ChemStructureObject = Class.create(Kekule.ChemObject,
 		for (var i = 0, l = this.getLinkedConnectorCount(); i < l; ++i)
 		{
 			var connector = this.getLinkedConnectorAt(i);
-			var objs = connector.getConnectedObjs();
-			for (var j = 0, k = objs.length; j < k; ++j)
+			if (connector instanceof Kekule.Bond)
 			{
-				if (objs[j] !== this && (objs[j].isHydrogenAtom && objs[j].isHydrogenAtom()))
+				var objs = connector.getConnectedObjs();
+				for (var j = 0, k = objs.length; j < k; ++j)
 				{
-					Kekule.ArrayUtils.pushUnique(result, objs[j]);
+					if (objs[j] !== this && (objs[j].isHydrogenAtom && objs[j].isHydrogenAtom()))
+					{
+						Kekule.ArrayUtils.pushUnique(result, objs[j]);
+					}
 				}
 			}
+		}
+		return result;
+	},
+	/**
+	 * Returns linked hydrogen atoms with explicit single covalence bonds.
+	 * These hydrogen atoms can be omitted in 2D structures.
+	 * @returns {Array}
+	 */
+	getLinkedHydrogenAtomsWithSingleBond: function()
+	{
+		var result = [];
+		for (var i = 0, l = this.getLinkedConnectorCount(); i < l; ++i)
+		{
+			var connector = this.getLinkedConnectorAt(i);
+			if ((connector instanceof Kekule.Bond) && connector.isSingleBond())
+			{
+				var objs = connector.getConnectedObjs();
+				if (objs.length === 2)
+				{
+					for (var j = 0, k = objs.length; j < k; ++j)
+					{
+						if (objs[j] !== this && (objs[j].isHydrogenAtom && objs[j].isHydrogenAtom()))
+						{
+							Kekule.ArrayUtils.pushUnique(result, objs[j]);
+						}
+					}
+				}
+			}
+		}
+		return result;
+	},
+	/**
+	 * Returns the hydrogen atom count with explicit single covalence bonds.
+	 * @param {Bool} includeCached If true, the hydrogen atoms removed in molecule standardization will also be counted.
+	 * @returns {Int}
+	 */
+	getLinkedHydrogenAtomsWithSingleBondCount: function(includeCached)
+	{
+		var result = this.getLinkedHydrogenAtomsWithSingleBond().length || 0;
+		if (includeCached)
+		{
+			var cachedBondHydrogenCount = this.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+			result += cachedBondHydrogenCount;
 		}
 		return result;
 	},
@@ -1091,6 +1196,16 @@ Kekule.BaseStructureNode = Class.create(Kekule.SimpleStructureNode,
 		}
 		else
 			return this.tryApplySuper('doGetCoord3D', [allowCoordBorrow, allowCreateNew])  /* $super(allowCoordBorrow, allowCreateNew) */;
+	},
+	/**
+	 * Returns whether this node is the only child(node or connector) in parent structure, or has no parent structure.
+	 * The orphan node may be occurs in 2D molecule CH4, BH3, etc., or metal molecule.
+	 * @returns {Bool}
+	 */
+	isOrphan: function()
+	{
+		var parent = this.getParent();
+		return (!parent || parent.getChildCount() <= 1);
 	}
 });
 
@@ -1205,6 +1320,18 @@ Kekule.ChemStructureNode = Class.create(Kekule.BaseStructureNode,
 			*/
 		}
 		return result;
+	},
+	/** @ignore*/
+	doCompareProperty: function(targetObj, propName, options)
+	{
+		if (options.method === Kekule.ComparisonMethod.CHEM_STRUCTURE && (propName === 'charge' || propName === 'radical'))
+		{
+			var v2 = (targetObj.getPropValue && targetObj.getPropValue(propName)) || 0;
+			var v1 = this.getPropValue(propName) || 0;
+			return v1 - v2;
+		}
+		else
+			return this.tryApplySuper('doCompareProperty', [targetObj, propName, options]);
 	},
 	/** @ignore */
 	doCompare: function(/*$super, */targetObj, options)
@@ -1342,8 +1469,36 @@ Kekule.ChemStructureNode = Class.create(Kekule.BaseStructureNode,
 	},
 
 	/** @private */
+	_getBondsValenceInfo: function(connectors)
+	{
+		var valenceSum = 0;
+		var maxValence = 0;
+		var piECount = this.getStructureCacheData('piElectronCount') || null;
+		for (var i = 0, l = connectors.length; i < l; ++i)
+		{
+			var connector = connectors[i];
+			// check if connector is a covalance bond
+			if (connector instanceof Kekule.Bond)
+			{
+				var v;
+				// a fix, if a hetero atom connected with two explicit aromatics bonds in a aromatic ring (e.g., pyrole),
+				// and the pi electron count is 2 (rather than 1), the bond order should be considered as 1 rather than 2
+				if (connector.getBondType() == Kekule.BondType.COVALENT && connector.getBondOrder() === Kekule.BondOrder.EXPLICIT_AROMATIC && piECount >= 2)
+					v = 1;
+				else
+					v = connector.getBondValence();
+				valenceSum += v;
+				if (v > maxValence)
+					maxValence = v;
+			}
+		}
+		return {'valenceSum': valenceSum, 'maxValence': maxValence};
+	},
+
+	/** @private */
 	_getCurrCovalentBondsInfo: function()
 	{
+		/*
 		var valenceSum = 0;
 		var maxValence = 0;
 		var piECount = this.getStructureCacheData('piElectronCount') || null;
@@ -1355,6 +1510,8 @@ Kekule.ChemStructureNode = Class.create(Kekule.BaseStructureNode,
 				&& (connector.getBondType() == Kekule.BondType.COVALENT))
 			{
 				var v;
+				if (filter && !filter(connector))
+					continue;
 				// a fix, if a hetero atom connected with two explicit aromatics bonds in a aromatic ring (e.g., pyrole),
 				// and the pi electron count is 2 (rather than 1), the bond order should be considered as 1 rather than 2
 				if (connector.getBondOrder() === Kekule.BondOrder.EXPLICIT_AROMATIC && piECount >= 2)
@@ -1366,12 +1523,16 @@ Kekule.ChemStructureNode = Class.create(Kekule.BaseStructureNode,
 					maxValence = v;
 			}
 		}
-
 		return {'valenceSum': valenceSum, 'maxValence': maxValence};
+		*/
+		return this._getBondsValenceInfo(this.filterConnector(function(connector){
+			return (connector instanceof Kekule.Bond) && (connector.getBondType() == Kekule.BondType.COVALENT);
+		}));
 	},
 	/** @private */
-	_getCurrIonicBondsInfo: function()
+	_getCurrIonicBondsInfo: function(filter)
 	{
+		/*
 		var valenceSum = 0;
 		var maxValence = 0;
 		for (var i = 0, l = this.getLinkedConnectorCount(); i < l; ++i)
@@ -1381,6 +1542,8 @@ Kekule.ChemStructureNode = Class.create(Kekule.BaseStructureNode,
 			if ((connector instanceof Kekule.Bond)
 				&& (connector.getBondType() == Kekule.BondType.IONIC))
 			{
+				if (filter && !filter(connector))
+					continue;
 				var v = connector.getBondValence();
 				valenceSum += v;
 				if (v > maxValence)
@@ -1388,6 +1551,10 @@ Kekule.ChemStructureNode = Class.create(Kekule.BaseStructureNode,
 			}
 		}
 		return {'valenceSum': valenceSum, 'maxValence': maxValence};
+		*/
+		return this._getBondsValenceInfo(this.filterConnector(function(connector){
+			return (connector instanceof Kekule.Bond) && (connector.getBondType() == Kekule.BondType.IONIC);
+		}));
 	}
 });
 
@@ -1427,7 +1594,14 @@ Kekule.AbstractAtom = Class.create(Kekule.ChemStructureNode,
 	/** @private */
 	initProperties: function()
 	{
-		this.defineProp('explicitHydrogenCount', {'dataType': DataType.INT, 'scope': Class.PropertyScope.PUBLISHED});
+		this.defineProp('explicitHydrogenCount', {
+			'dataType': DataType.INT, 'scope': Class.PropertyScope.PUBLISHED,
+			'setter': function(value) {
+				var fValue = parseFloat(value);
+				var v = (isNaN(fValue) || fValue < 0)? void(0): fValue;
+				this.setPropStoreFieldValue('explicitHydrogenCount', v);
+			}
+		});
 	},
 	/** @private */
 	getAutoIdPrefix: function()
@@ -1459,16 +1633,25 @@ Kekule.AbstractAtom = Class.create(Kekule.ChemStructureNode,
 	/**
 	 * Returns hydrogen count linked to this atom.
 	 * Same as getExplicitHydrogenCount if includingBondedHydrogen is false.
-	 * @param {Bool} includingBondedHydrogen If true, hydrogen siblings will also be take into consideration.
+	 * @param {Bool} includingBondedHydrogen If true, hydrogen siblings linked with single bond will also be take into consideration.
 	 */
 	getHydrogenCount: function(includingBondedHydrogen)
 	{
 		var result = this.getExplicitHydrogenCount() || 0;
 		if (includingBondedHydrogen)
 		{
-			var hatoms = this.getLinkedHydrogenAtoms();
+			//var hatoms = this.getLinkedHydrogenAtoms();
+			/*
+			var hatoms = this.getLinkedHydrogenAtomsWithSingleBond();
 			result += hatoms.length || 0;
+			var cachedBondHydrogenCount = this.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+			result += cachedBondHydrogenCount;
+			*/
+			result += this.getLinkedHydrogenAtomsWithSingleBondCount(false);
 		}
+		// the bond of cached bonded Hs are already be removed, so thet need to be calculated too
+		var cachedBondHydrogenCount = this.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+		result += cachedBondHydrogenCount;
 		return result;
 	},
 	/**
@@ -1478,6 +1661,14 @@ Kekule.AbstractAtom = Class.create(Kekule.ChemStructureNode,
 	setHydrogenCount: function(value)
 	{
 		return this.setExplicitHydrogenCount(value);
+	},
+	/**
+	 * Returns whether the explicitHydrogen property is set.
+	 * @returns {Bool}
+	 */
+	hasExplicitHydrogens: function()
+	{
+		return Kekule.ObjUtils.notUnset(this.getExplicitHydrogenCount());
 	},
 
 	/**
@@ -1532,6 +1723,7 @@ Kekule.AbstractAtom = Class.create(Kekule.ChemStructureNode,
  * @property {Hash} atomType The type if this atom, data is read from {@link kekule.structGenAtomTypesData.js}.
  *   Undefined or null means uncertain type.
  * @property {Int} hybridizationType Hybridization type (sp/sp2/sp3) of atom Undefined or null means uncertain type.
+ * @property {Bool} disableImplicitHydrogenEstimation Whether the auto calcualtion of implicit H count is disabled (e.g., for metal atoms).
  */
 Kekule.Atom = Class.create(Kekule.AbstractAtom,
 /** @lends Kekule.Atom# */
@@ -1644,6 +1836,7 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 				}
 		});
 		this.defineProp('hybridizationType', {'dataType': DataType.INT, 'enumSource': Kekule.HybridizationType});
+		this.defineProp('disableImplicitHydrogenEstimation', {'dataType': DataType.BOOL});
 	},
 	/** @private */
 	getAutoIdPrefix: function()
@@ -1736,6 +1929,15 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 	},
 
 	/**
+	 * Returns the element series of current atom.
+	 * @returns {String} Value from {@link Kekule.ElementSeries}.
+	 */
+	getElementSeries: function()
+	{
+		var isotope = this.getIsotope();
+		return isotope && isotope.getSeries();
+	},
+	/**
 	 * Check if this is a normal atom (not a pseudo one or unset one)
 	 */
 	isNormalAtom: function()
@@ -1743,7 +1945,6 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 		var isotope = this.getIsotope();
 		return isotope? isotope.isNormalElement(): false;
 	},
-
 	/** @ignore */
 	isHydrogenAtom: function()
 	{
@@ -1816,23 +2017,94 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 			return 0;
 	},
 	/**
-	 * Guess and returns the valence of atom.
-	 * Note this method considers the explicit hydrogen count.
+	 * Returns the valence of all explicit factors (including bond and explicit hydrogens) of atom.
+	 * @param {Hash} options May include the following fields:
+	 * {
+	 *   ignoreBondHydrogens: Bool,
+	 *   ignoreExplicitHydrogens: Bool,
+	 * }
 	 * @returns {Int}
 	 */
-	getValence: function()
+	getExplicitValence: function(options)
 	{
+		var ops = options || {};
 		if (this.isNormalAtom())
 		{
 			var bondsInfo = this._getCurrCovalentBondsInfo();
 			var expValence = bondsInfo.valenceSum;
+			if (!ops.ignoreBondHydrogens)
+			{
+				var omittedBondHydrogenCount = this.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+				expValence += omittedBondHydrogenCount;
+			}
+			else  // ignore bond hydrogens
+			{
+				expValence -= (this.getLinkedHydrogenAtomsWithSingleBond() || []).length;
+			}
 			// adjust with explicitHCount
-			var explicitHCount = this.getExplicitHydrogenCount() || 0;
-			expValence += explicitHCount;
-			var charge = Math.round(this.getCharge() || 0);
+			if (ops.ignoreExplicitHydrogens)
+			{
 
-			var result = Kekule.ValenceUtils.getImplicitValence(this.getAtomicNumber(), charge, expValence);
+			}
+			else
+			{
+				var explicitHCount = this.getExplicitHydrogenCount() || 0;
+				expValence += explicitHCount;
+			}
 
+			return expValence;
+		}
+		else
+			return 0;
+	},
+	/**
+	 * Guess and returns the valence of atom.
+	 * Note this method considers the explicit hydrogen count.
+	 * @param {Hash} options May include the following fields:
+	 * {
+	 *   ignoreBondHydrogens: Bool,
+	 *   ignoreExplicitHydrogens: Bool,
+	 *   ignoreCharge: Bool
+	 * }
+	 * @returns {Int}
+	 */
+	getValence: function(options)
+	{
+		var ops = options || {};
+		if (this.isNormalAtom())
+		{
+			/*
+			var bondsInfo = this._getCurrCovalentBondsInfo();
+			var expValence = bondsInfo.valenceSum;
+			if (!ops.ignoreBondHydrogens)
+			{
+				var omittedBondHydrogenCount = this.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+				expValence += omittedBondHydrogenCount;
+			}
+			else  // ignore bond hydrogens
+			{
+				expValence -= (this.getLinkedHydrogenAtomsWithSingleBond() || []).length;
+			}
+			// adjust with explicitHCount
+			if (ops.ignoreExplicitHydrogens)
+			{
+
+			}
+			else
+			{
+				var explicitHCount = this.getExplicitHydrogenCount() || 0;
+				expValence += explicitHCount;
+			}
+			*/
+			var result;
+			var expValence = this.getExplicitValence(ops);
+			if (!this.hasExplicitHydrogens())  // has no explicit hydrogen set, now the implicit hydrogen should be considered
+			{
+				var charge = ops.ignoreCharge? 0: Math.round(this.getCharge() || 0);
+				result = Kekule.ValenceUtils.getImplicitValence(this.getAtomicNumber(), charge, expValence);
+			}
+			else   // no implicit hydrogen, returns the explicitValence directly
+				result = expValence;
 			return result;
 		}
 		else
@@ -1840,15 +2112,20 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 	},
 
 	/**
-	 * If {@link Kekule.Atom#explicitHydrogenCount} is not set, use this function to retrieve count implicit hydrogens.
+	 * Returns the count of implicit hydrogens.
+	 * Note when calculating the implicit H count, explicit hydrogens are automatically ignored.
+	 * //@param {Hash} options Options to calculate implicit H count. It may including the following fields: <br />
+	 * //  allowNegative: Bool. When true, a negative value may be returned when bond order sum and explicit H count is too large.
+	 *
 	 * @returns {Int} Implicit hydrogen count.
 	 */
-	getImplicitHydrogenCount: function()
+	getImplicitHydrogenCount: function(options)
 	{
-		if (this.isNormalAtom())
+		if (this.isNormalAtom() && this._needToEsitmateImplicityHydrogens())
 		{
 			//if (Kekule.ObjUtils.isUnset(this.getExplicitHydrogenCount()))
 			{
+				//var allowNegative = options && options.allowNegative;
 				var coValentBondsInfo = this._getCurrCovalentBondsInfo();
 				var ionicBondsInfo = this._getCurrIonicBondsInfo();
 				/*
@@ -1859,6 +2136,9 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 
 				var charge = Math.round(this.getCharge() || 0);
 				var radicalECount = Kekule.RadicalOrder.getRadicalElectronCount(this.getRadical());
+				var omittedBondHydrogenCount = this.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+				//var explicitBondedHydrogenAtoms = ((this.getLinkedHydrogenAtoms && this.getLinkedHydrogenAtoms()) || []).length;
+				//var coValenceBondValuenceSum
 				/*
 				var valence = this.getImplicitValence();
 				// adjust with radical
@@ -1868,10 +2148,11 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 				return Math.max(valence - coValentBondsInfo.valenceSum - ionicBondsInfo.valenceSum, 0);
 				*/
 				var result = Kekule.ChemStructureUtils.getImplicitHydrogenCount(this.getAtomicNumber() || 0, {
-					'coValenceBondValenceSum': coValentBondsInfo.valenceSum || 0,
+					'coValenceBondValenceSum': (coValentBondsInfo.valenceSum || 0) + omittedBondHydrogenCount,
 					'otherBondValenceSum': ionicBondsInfo.valenceSum || 0,
 					'charge': charge,
 					'radicalECount': radicalECount
+					//'allowNegative': allowNegative
 				});
 				return result;
 			}
@@ -1879,21 +2160,64 @@ Kekule.Atom = Class.create(Kekule.AbstractAtom,
 		else
 			return 0;
 	},
+	/** @private */
+	_needToEsitmateImplicityHydrogens: function()
+	{
+		var result = !this.getDisableImplicitHydrogenEstimation();
+		if (result)
+		{
+			var isOrphan = this.isOrphan();
+			var symbol = this.getSymbol();
+			var strategyRoot = Kekule.globalOptions.get('structure.implicitHydrogenEstimationStrategy') || {};
+			// check element
+			if ((strategyRoot.targetElements && strategyRoot.targetElements[symbol] === false)
+				|| (isOrphan && strategyRoot.targetOrphanAtomElements && strategyRoot.targetOrphanAtomElements[symbol] === false))
+			{
+				result = false;
+			}
+			// check element category
+			if (result)
+			{
+				var targetCategories = strategyRoot.targetElementCategories;
+				var targetOrphanCategories = strategyRoot.targetOrphanAtomElementCategories;
+				var elemCategories = this.getIsotope().getCategories();
+				for (var i = 0, l = elemCategories.length; i < l; ++i)
+				{
+					var c = elemCategories[i];
+					if ((targetCategories && targetCategories[c] === false)
+						|| (isOrphan && targetOrphanCategories && targetOrphanCategories[c] === false))
+					{
+						result = false;
+						break;
+					}
+				}
+			}
+		}
+		return result;
+	},
 
 	/**
-	 * If explicitHydrogenCount is set, returns it, else returns implicit hydrogen count.
-	 * @param {Bool} includingBondedHydrogen
+	 * Returns the single bonded hydrogen atoms + explicit or implicit hydrogens count.
+	 * @param {Bool} includingBondedHydrogen If true, hydrogen siblings linked with single bond will also be take into consideration.
 	 */
 	getHydrogenCount: function(includingBondedHydrogen)
 	{
+	  /*
 		var result;
 		if (Kekule.ObjUtils.isUnset(this.getExplicitHydrogenCount()))
 			result = this.getImplicitHydrogenCount() || 0;
 		else
 			result = this.getExplicitHydrogenCount() || 0;
 		if (includingBondedHydrogen)
-			result += this.getLinkedHydrogenAtoms().length || 0;
+		{
+			result += this.getLinkedHydrogenAtomsWithSingleBondCount(true);
+		}
 		return result;
+	  */
+    var result = this.tryApplySuper('getHydrogenCount', [includingBondedHydrogen]);
+    if (Kekule.ObjUtils.isUnset(this.getExplicitHydrogenCount()))  // when explicit hydrogen is not set, we need to calc the implicit ones
+      result += this.getImplicitHydrogenCount() || 0;
+    return result;
 	},
 	/**
 	 * Returns exact mass of current atom.
@@ -5999,9 +6323,21 @@ Kekule.StructureFragment = Class.create(Kekule.ChemStructureNode,
 	/**
 	 * Removes all explicit hydrogen atoms and related bonds from this structure.
 	 */
-	clearExplicitHydrogens: function(forceKeepStructureCache)
+	clearExplicitBondHydrogens: function(forceKeepStructureCache, forceClearStereoHydrogenAtoms)
 	{
 		var self = this;
+		var isHydrogenConnectedWithSimpleSingleBond = function(node)
+		{
+			var connectors = node.getLinkedConnectors();
+			var result = connectors.length === 1;
+			if (result)
+			{
+				var connector = connectors[0];
+				result = connector.isSingleBond && connector.isSingleBond()
+					&& connector.getStereo && (!connector.getStereo() || connector.getStereo() === Kekule.BondStereo.NONE);
+			}
+			return result;
+		};
 		var delNodeWithConnectors = function(node, index)
 		{
 			var conns = node.getLinkedConnectors();
@@ -6010,6 +6346,25 @@ Kekule.StructureFragment = Class.create(Kekule.ChemStructureNode,
 				var conn = conns[i];
 				if (self.hasConnector(conn, true))
 					self.removeConnector(conn, false);
+			}
+			self.removeNodeAt(index, false);
+		};
+		var delHydrogenAtomWithConnectors = function(atom, index, addHCountCache)
+		{
+			var conns = atom.getLinkedConnectors();
+			for (var i = conns.length; i >= 0; --i)
+			{
+				var conn = conns[i];
+				if (self.hasConnector(conn, true))
+				{
+					if (addHCountCache)  // mark the count of bonded H atom in structure cache
+					{
+						var node = atom.getLinkedObjsOnConnector(conn)[0];
+						var oldCount = node.getStructureCacheData('omittedBondHydrogenAtomCount') || 0;
+						node.setStructureCacheData('omittedBondHydrogenAtomCount', oldCount + 1);
+					}
+					self.removeConnector(conn, false);
+				}
 			}
 			self.removeNodeAt(index, false);
 		};
@@ -6028,16 +6383,24 @@ Kekule.StructureFragment = Class.create(Kekule.ChemStructureNode,
 				var node = this.getNodeAt(i);
 				if (node instanceof Kekule.ChemStructureNode)
 				{
-					if (this.isSubFragment(node) && node.clearExplicitHydrogens)
+					if (this.isSubFragment(node) && node.clearExplicitBondHydrogens)
 					{
-						node.clearExplicitHydrogens(forceKeepStructureCache);
+						node.clearExplicitBondHydrogens(forceKeepStructureCache, forceClearStereoHydrogenAtoms);
 						if (node.getNodeCount() <= 0)  // after clear, no atom exists in this subgroup
+						{
 							delNodeWithConnectors(node, i);
+						}
 					}
 					else
 					{
 						if (node.isHydrogenAtom())
-							delNodeWithConnectors(node, i);
+						{
+							if (forceClearStereoHydrogenAtoms || isHydrogenConnectedWithSimpleSingleBond(node))
+							{
+								//delNodeWithConnectors(node, i);
+								delHydrogenAtomWithConnectors(node, i, true);
+							}
+						}
 					}
 				}
 			}
@@ -6430,7 +6793,7 @@ Kekule.StructureFragment = Class.create(Kekule.ChemStructureNode,
 	traverse: function(callback, startingNode, breadthFirst, partialNodes)
 	{
 		if (this.hasCtab())
-			return this.getCtab().traverse(callback, startingNode, breadthFirst);
+			return this.getCtab().traverse(callback, startingNode, breadthFirst, partialNodes);
 		else
 			return null;
 	}
@@ -6665,7 +7028,7 @@ Kekule.SubGroup = Class.create(Kekule.StructureFragment,
 	/** @ignore */
 	getLabel: function()
 	{
-		return Kekule.ChemStructureNodeLabels.SUBGROUP;
+		return this.getName() || this.getAbbr() || this.getFormulaText() || Kekule.ChemStructureNodeLabels.SUBGROUP;
 	}
 });
 // RGroup is often used in organic chemistry, here we define it as an alias of SubGroup

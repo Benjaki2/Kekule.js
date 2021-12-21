@@ -16,7 +16,15 @@
   <link rel="stylesheet" type="text/css" href="https://unpkg.com/kekule/dist/themes/default/kekule.css" />
   -->
 
-  <script src="../../../src/kekule.js?min=false&locals=en,zh&language=en&modules=chemWidget,algorithm,calculation,openbabel,indigo"></script>
+  <script>
+    var _kekule_environment_ = {
+      'kekule.language': 'zh-CN'
+    }
+  </script>
+  <!--
+  <script src="../../../dist/kekule.min.js?locals=en,zh&language=en&modules=chemWidget,algorithm,calculation,openbabel,indigo"></script>
+  -->
+  <script src="../../../src/kekule.js?min=false&locals=en,zh&language=zh&modules=chemWidget,spectroscopy,algorithm,calculation,openbabel,indigo"></script>
   <link rel="stylesheet" type="text/css" href="../../../src/widgets/themes/default/kekule.css" />
 
 
@@ -48,6 +56,63 @@
       BNS.objInspector
     ];
     */
+
+    var EMC = Kekule.Editor.ObjModifier.Category;
+    var SM = Kekule.ObjPropSettingManager;
+    // overwrite molOnly setting of composer
+    SM.register('Kekule.Editor.Composer.molOnly', {  // composer that can only edit molecule
+	    //enableStyleToolbar: true,
+	    enableObjModifierToolbar: true,
+	    enableOperHistor: true,
+	    enableLoadNewFile: true,
+	    enableCreateNewDoc: true,
+	    allowCreateNewChild: true,
+	    commonToolButtons: [
+		    BNS.newDoc,
+		    BNS.loadData,
+		    BNS.saveData,
+		    BNS.undo,
+		    BNS.redo,
+		    BNS.zoomIn,
+		    BNS.zoomOut,
+		    BNS.issueInspector
+	    ],
+	    chemToolButtons: [
+		    BNS.manipulate,
+		    BNS.erase,
+		    {'name': BNS.molBond, 'attached': [
+				    BNS.molBondSingle, BNS.molBondDouble, BNS.molBondTriple,
+				    /*BNS.molBondCloser,*/ BNS.molBondWedgeUp, BNS.molBondWedgeDown,
+				    BNS.molChain,
+				    BNS.trackInput,
+				    /*
+						BNS.molRepSubBondMark,
+						BNS.molRepMethane,
+						*/
+				    BNS.molRepFischer1, BNS.molRepFischer2,
+				    BNS.molRepSawhorseStaggered, BNS.molRepSawhorseEclipsed
+			    ]},
+		    BNS.molAtom,
+		    /*BNS.molFormula,*/
+		    {'name': BNS.molRing, 'attached': [
+				    BNS.molRing3, BNS.molRing4, BNS.molRing5, BNS.molRing6,
+				    BNS.molFlexRing,
+				    BNS.molRingAr6,
+				    BNS.molRepCyclopentaneHaworth1, /* BNS.molRepCyclopentaneHaworth2,*/
+				    BNS.molRepCyclohexaneHaworth1, /* BNS.molRepCyclohexaneHaworth2, */
+				    BNS.molRepCyclohexaneChair1, BNS.molRepCyclohexaneChair2
+			    ]},
+			    //BNS.molCharge
+			    {
+				    'name': BNS.molCharge, 'attached': [
+					    BNS.molChargeClear, BNS.molChargePositive, BNS.molChargeNegative,
+					    BNS.molRadicalDoublet, BNS.molElectronLonePair
+				    ]
+			    }
+	    ],   // create only chem tool buttons related with molecule
+	    styleToolComponentNames: null,  // create all default style components
+	    allowedObjModifierCategories: [EMC.GENERAL, EMC.CHEM_STRUCTURE]  // only all chem structure modifiers
+    });
 
     var chemEditor;
     var chemEditorUi;
@@ -107,6 +172,33 @@
 	    chemEditorUi.on('operChange', function(e){
 		    console.log('operChange', e);
 	    });
+
+      chemEditorUi.on('selectionChange', function(e){
+        console.log('selectionChange', e, chemEditorUi.getSelection());
+      });
+
+      /*
+      chemEditorUi.on('hoverOnObjs', function(e){
+        console.log('hoverOnObjs', e.objs);
+      });
+      */
+
+      /*
+	    var elem = chemEditorUi.getEditor().getElement();
+      Kekule.X.Event.addListener(elem, 'pointermove', function(e) {
+        var offsetCoord = e.getOffsetCoord(true);
+        //var elemPos = Kekule.HtmlElementUtils.getElemPagePos(elem);
+        //var coord = Kekule.CoordUtils.substract(offsetCoord, elemPos);
+
+        var obj = chemEditorUi.getEditor().getTopmostBasicObjectAtCoord(offsetCoord);
+        if (obj)
+          console.log(obj.getClassName(), obj.getId());
+
+        var markers = chemEditor.getUiMarkersAtCoord(offsetCoord);
+        if (markers.length)
+          console.log(markers[0]);
+      });
+      */
 
 
       // debug

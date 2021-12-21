@@ -20,6 +20,11 @@
 var AU = Kekule.ArrayUtils;
 var EU = Kekule.HtmlElementUtils;
 
+function _isNativePointerEventEnabled()
+{
+	return !Kekule.globalOptions.widget.events.forceSimulatePointerEvent && Kekule.BrowserFeature.pointerEvent;
+}
+
 /**
  * Enumeration of predefined widget html element tag names.
  * @ignore
@@ -3470,7 +3475,14 @@ Kekule.Widget.BaseWidget = Class.create(ObjectEx,
 	/** @private */
 	_touchActionNoneTouchStartHandler: function(e)
 	{
-		e.preventDefault();
+		try
+		{
+			e.preventDefault();
+		}
+		catch(e)  // avoid exception throw in Chrome
+		{
+
+		}
 	},
 
 	/**
@@ -3745,7 +3757,8 @@ Kekule.Widget.BaseWidget = Class.create(ObjectEx,
 					//handled = handled || this[funcName](e);
 					handled = this[funcName](e);  // avoid shortcircuit
 				}
-				else  // check for controller
+				//else  // check for controller
+				if (!e.cancelBubble)
 				{
 					// dispatch event to interaction controllers
 					//handled = handled || this.dispatchEventToIaControllers(e);
@@ -3754,7 +3767,8 @@ Kekule.Widget.BaseWidget = Class.create(ObjectEx,
 			}
 
 			// dispatch to HTML event dispatcher
-			this.getHtmlEventDispatcher().dispatch(e);
+			if (!e.cancelBubble)
+				this.getHtmlEventDispatcher().dispatch(e);
 
 			this.doReactUiEvent(e);
 
@@ -4075,6 +4089,47 @@ Kekule.Widget.BaseWidget = Class.create(ObjectEx,
 	{
 		var gm = this.getGlobalManager();
 		return gm.getMouseCaptureWidget() === this;
+	},
+
+	/**
+	 * Get the mouse coord based on clientElem.
+	 * @private
+	 */
+	_getEventMouseCoord: function(e, clientElem)
+	{
+		var elem = clientElem || this.getElement();
+		var targetElem = e.getTarget();
+		//var coord = {'x': e.getOffsetX(), 'y': e.getOffsetY()};
+
+		var coord = e.getOffsetCoord(true);  // consider CSS transform
+
+		if (targetElem === elem)
+			return coord;
+		else
+		{
+			var elemPos = Kekule.HtmlElementUtils.getElemPagePos(elem);
+			var targetPos = Kekule.HtmlElementUtils.getElemPagePos(targetElem);
+			var offset = {'x': targetPos.x - elemPos.x, 'y': targetPos.y - elemPos.y};
+			coord = Kekule.CoordUtils.substract(coord, offset);
+
+			//console.log('mouse coord', e.getOffsetX(), e.getOffsetY(), e.layerX, e.layerY, offset, coord);
+
+			return coord;
+		}
+
+		/*
+		//return {x: e.getRelXToCurrTarget(), y: e.getRelYToCurrTarget()};
+		var coord = {'x': e.getClientX(), 'y': e.getClientY()};
+
+		//var offset = {'x': elem.getBoundingClientRect().left - elem.scrollLeft, 'y': elem.getBoundingClientRect().top - elem.scrollTop};
+		var rect = Kekule.HtmlElementUtils.getElemPageRect(elem, true);
+		var offset = {
+			'x': rect.left - elem.scrollLeft,
+			'y': rect.top - elem.scrollTop
+		};
+		var result = Kekule.CoordUtils.substract(coord, offset);
+		return result;
+		*/
 	},
 
 	// methods about drag and drop
@@ -4528,39 +4583,7 @@ Kekule.Widget.InteractionController = Class.create(ObjectEx,
 	/** @private */
 	_getEventMouseCoord: function(e, clientElem)
 	{
-		var elem = clientElem || this.getWidget().getElement();
-		var targetElem = e.getTarget();
-		//var coord = {'x': e.getOffsetX(), 'y': e.getOffsetY()};
-
-		var coord = e.getOffsetCoord(true);  // consider CSS transform
-
-		if (targetElem === elem)
-			return coord;
-		else
-		{
-			var elemPos = Kekule.HtmlElementUtils.getElemPagePos(elem);
-			var targetPos = Kekule.HtmlElementUtils.getElemPagePos(targetElem);
-			var offset = {'x': targetPos.x - elemPos.x, 'y': targetPos.y - elemPos.y};
-			coord = Kekule.CoordUtils.substract(coord, offset);
-
-			//console.log('mouse coord', e.getOffsetX(), e.getOffsetY(), e.layerX, e.layerY, offset, coord);
-
-			return coord;
-		}
-
-		/*
-		//return {x: e.getRelXToCurrTarget(), y: e.getRelYToCurrTarget()};
-		var coord = {'x': e.getClientX(), 'y': e.getClientY()};
-
-		//var offset = {'x': elem.getBoundingClientRect().left - elem.scrollLeft, 'y': elem.getBoundingClientRect().top - elem.scrollTop};
-		var rect = Kekule.HtmlElementUtils.getElemPageRect(elem, true);
-		var offset = {
-			'x': rect.left - elem.scrollLeft,
-			'y': rect.top - elem.scrollTop
-		};
-		var result = Kekule.CoordUtils.substract(coord, offset);
-		return result;
-		*/
+		return this.getWidget()._getEventMouseCoord(e, clientElem);
 	}
 });
 
@@ -5082,7 +5105,7 @@ Kekule.Widget.BaseEventsReceiver = Class.create(ObjectEx,
 	initialize: function(/*$super, */doc, eventRootObj)
 	{
 		this._document = doc || Kekule.$jsRoot.document;
-		this._eventRootObj = eventRootObj || this._document.documentElement;
+		this._eventRootObj = eventRootObj || (this._document && this._document.documentElement);
 
 		this.reactUiEventBind = this.reactUiEvent.bind(this);
 		this.reactDomNodeInsertEventBind = this.reactDomNodeInsertEvent.bind(this);
@@ -5367,7 +5390,7 @@ Kekule.Widget.GlobalManager = Class.create(Kekule.Widget.BaseEventsReceiver,
 		*/
 		//Kekule.X.domReady(this.domReadyInit.bind(this), this._document);
 
-		this.tryApplySuper('initialize', [this._document, this._document.documentElement])  /* $super(this._document, this._document.documentElement) */;
+		this.tryApplySuper('initialize', [this._document, this._document && this._document.documentElement])  /* $super(this._document, this._document.documentElement) */;
 	},
 	/** @ignore */
 	finalize: function(/*$super*/)
@@ -6219,7 +6242,8 @@ Kekule.Widget.GlobalManager = Class.create(Kekule.Widget.BaseEventsReceiver,
 
 		this.doReactUiEvent(e, targetWidget);
 
-		if (!e.ghostMouseEvent && !Kekule.BrowserFeature.pointerEvent && this.getEnableMouseEventToPointerPolyfill())
+		//if (!e.ghostMouseEvent && !Kekule.BrowserFeature.pointerEvent && this.getEnableMouseEventToPointerPolyfill())
+		if (!e.ghostMouseEvent && !_isNativePointerEventEnabled() && this.getEnableMouseEventToPointerPolyfill())
 		{
 			var mouseEvents = ['mousedown', 'mousemove', 'mouseout', 'mouseover', 'mouseup'];
 			var touchEvents = ['touchstart', 'touchmove', 'touchleave', 'touchend', 'touchcancel'];
@@ -6584,7 +6608,7 @@ Kekule.Widget.GlobalManager = Class.create(Kekule.Widget.BaseEventsReceiver,
 
 		var doc = popupElem.ownerDocument;
 		// check if already in top most layer
-		var contextRootElem = this.getContextRootElementOfCaller(invokerWidget);
+		var contextRootElem = invokerWidget? this.getContextRootElementOfCaller(invokerWidget): popupElem.ownerDocument.body;
 		var topmostLayer = this.getTopmostLayer(doc, true, contextRootElem);
 
 		var isOnTopLayer = popupElem.parentNode === topmostLayer;
@@ -6702,7 +6726,7 @@ Kekule.Widget.GlobalManager = Class.create(Kekule.Widget.BaseEventsReceiver,
 		//if (!isOnTopLayer)  // move to isolate layer first to calculate dimensions
 		if (!Kekule.DomUtils.isInDomTree(elem, null, {acrossShadowRoot: true}))  // not in DOM, put in isolate layer first to calculate dimensions
 		{
-			var contextRootElem = this.getContextRootElementOfCaller(invokerWidget);
+			var contextRootElem = invokerWidget? this.getContextRootElementOfCaller(invokerWidget): elem.ownerDocument.body;
 			isolatedLayer = this.getIsolatedLayer(widget.getDocument(), true, contextRootElem);
 			isolatedLayer.appendChild(elem);
 			manualAppended = true;
@@ -7164,7 +7188,7 @@ Kekule.Widget.GlobalManager = Class.create(Kekule.Widget.BaseEventsReceiver,
 		*/
 
 		// ensure the modal background and modal element behind the topmost layer (where the popup widget may exist in it)
-		var rootElem = this.getContextRootElementOfCaller(caller);
+		var rootElem = caller? this.getContextRootElementOfCaller(caller): elem.ownerDocument.body;
 		//console.log(rootElem, widget);
 		var topmostLayer = this.getTopmostLayer(doc, false, rootElem);
 		if (topmostLayer && topmostLayer.parentNode === rootElem)

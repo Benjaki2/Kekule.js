@@ -169,6 +169,14 @@ Kekule.IO.SmilesUtils = {
 /**
  * Writer for saving molecule to SMILES format text data.
  * Use smilesMolWriter.writeData(mol) to save molecule to SMILES text.
+ * The writeData method of this writer may receive an options param, including the following fields:
+ * {
+ *   ignoreStereo: Bool,  (default false)
+ *   ignoreStereoBond: Bool,  (default false)
+ *   ignoreStereoAtom: Bool, (deault false)
+ *   ignoreExplicitHydrogens: Bool, (default false)
+ *   ignoreImplicitHydrogens: Bool (default false)
+ * }
  * @class
  * @augments Kekule.IO.ChemDataWriter
  */
@@ -273,7 +281,12 @@ Kekule.IO.SmilesMolWriter = Class.create(Kekule.IO.ChemDataWriter,
 	/** @private */
 	_prepareStereoBondsInformation: function(ctab, options)
 	{
-		if (options.ignoreStereoBond)
+		var ignoreBondStereo = options.ignoreStereoBond;
+		if (Kekule.ObjUtils.isUnset(ignoreBondStereo))
+			ignoreBondStereo = options.ignoreStereo || false;
+
+		//if (options.ignoreStereoBond)
+		if (ignoreBondStereo)
 			return null;
 
 		var stereoBondCount = 0;
@@ -482,7 +495,7 @@ Kekule.IO.SmilesMolWriter = Class.create(Kekule.IO.ChemDataWriter,
 			if (nextNodes && nextNodes.length)
 			{
 				// check if there is a bonded H atom, as it may affects the stereo and are ignored in vertex graph
-				var bondedHAtoms = node.getLinkedHydrogenAtoms();
+				var bondedHAtoms = node.getLinkedHydrogenAtomsWithSingleBond();
 				if (bondedHAtoms && bondedHAtoms.length === 1 && nextNodes.indexOf(bondedHAtoms[0]) < 0)
 				{
 					nextNodes.push(bondedHAtoms[0]);
@@ -509,27 +522,98 @@ Kekule.IO.SmilesMolWriter = Class.create(Kekule.IO.ChemDataWriter,
 		}
 
 		// hydrogen, show if explicit H count is set or non-C aromatic atom link with H
-		var explicitHCount;
+		/*
+		var explicitHCount = node.getHydrogenCount? (node.getHydrogenCount(true) || 0):
+			node.getLinkedHydrogenAtomsWithSingleBond? (node.getLinkedHydrogenAtomsWithSingleBond() || []).length:
+			0;
+		*/
+		var explicitHCount = this._getNodeHydrogenCount(node, options);
+		var outputExplicitH = true;
 		var radical = node.getRadical? Math.round(node.getRadical() || 0): 0;
 		if (schiralRot)  // if chiral center, H is always be listed
-			explicitHCount = node.getHydrogenCount? (node.getHydrogenCount(true) || 0): 0;  // calc bonded Hs, as they are excluded from graph
+			;  // explicitHCount = node.getHydrogenCount? (node.getHydrogenCount(true) || 0): 0;  // calc bonded Hs, as they are excluded from graph
 		else if (radical)  // if with radical, we still need to mark out the Hs, e.g. C[CH]C for C-C.-C
 		{
-			explicitHCount = node.getHydrogenCount? (node.getHydrogenCount(true) || 0): 0;
+			;  // explicitHCount = node.getHydrogenCount? (node.getHydrogenCount(true) || 0): 0;
 		}
 		else
 		{
-			explicitHCount = node.getExplicitHydrogenCount ? node.getExplicitHydrogenCount() : 0;
-			if (!explicitHCount && isAromatic && (symbol !== 'C') && node.getImplicitHydrogenCount)
+			/*
+			explicitHCount = (node.getExplicitHydrogenCount && node.getExplicitHydrogenCount()) || 0;
+			var linkedHydrogronAtomCount = node.getLinkedHydrogenAtoms && node.getLinkedHydrogenAtoms().length;
+			if (linkedHydrogronAtomCount)
+				explicitHCount += linkedHydrogronAtomCount;
+			*/
+			//explicitHCount = node.getHydrogenCount? (node.getHydrogenCount(true) || 0): 0;
+
+			if (node instanceof Kekule.Atom)
 			{
-				explicitHCount = node.getImplicitHydrogenCount();
+				/*
+				if (!explicitHCount && isAromatic && (symbol !== 'C') && node.getImplicitHydrogenCount)  // hydrogens on aromatic hetero atom should be marked
+				{
+					explicitHCount = node.getImplicitHydrogenCount();
+				}
+				*/
+				if (explicitHCount && isAromatic && (symbol !== 'C'))   // hydrogens on aromatic hetero atom should always be marked
+				{
+
+				}
+				else if ((options.ignoreExplicitHydrogens || options.ignoreImplicitHydrogens) && (explicitHCount !== this._getNodeHydrogenCount(node, {})))
+				{
+					// need to output,
+				}
+				else
+				{
+					var currValence = (node.getValence && node.getValence()) || 0;
+					var maxPossibleValence = Kekule.ValenceUtils.getMaxPossibleValence(node.getAtomicNumber(), node.getCharge()) || 0;
+					if (currValence)
+					{
+						// normal atom, check if the current valence of atom is out of possible valence (e.g. CH5), if so, explicit H should be marked
+						if (currValence > maxPossibleValence && explicitHCount)    // abnormal explicit H count, should output explicit H directly
+						{
+
+						}
+						else
+						{
+							/*
+							// try guess a valence with all H off, if the valence got is less than current valence (the explicit H determinates the valence), then H atom count should be output
+							var valenceWithoutH = (node.getValence && node.getValence({ignoreExplicitHydrogens: true, ignoreBondHydrogens: true})) || 0;  // all bonded are omitted already, so we now only need to calc explicit and omitted Hs
+							if (valenceWithoutH < currValence)
+							{
+
+							}
+							*/
+							if (node.hasExplicitHydrogens())
+							{
+								if ((node.getExplicitHydrogenCount() || 0) === (node.getImplicitHydrogenCount() || 0))  // explicit H count same as implicit, the H will not no need to output HCount
+									outputExplicitH = false;
+							}
+							else // check if bonded H
+							{
+								// try guess a valence with all H off, if the valence got is less than current valence (the explicit H determinates the valence), then H atom count should be output
+								var valenceWithoutH = (node.getValence && node.getValence({ignoreExplicitHydrogens: true, ignoreBondHydrogens: true})) || 0;  // all bonded are omitted already, so we now only need to calc explicit and omitted Hs
+								if (valenceWithoutH < currValence)
+								{
+									// need to output H
+								}
+								else  // no need to output explicit Hs
+								{
+									//explicitHCount = 0;
+									outputExplicitH = false;
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 		// write explicit H count after chiral
-		if (explicitHCount)
+		//if (explicitHCount)
+		if (outputExplicitH)
 		{
-			result += SMI.ATOM_H;
 			var hcount = Math.round(explicitHCount);
+			if (hcount > 0)
+				result += SMI.ATOM_H;
 			if (hcount > 1)
 				result += hcount;
 		}
@@ -550,7 +634,7 @@ Kekule.IO.SmilesMolWriter = Class.create(Kekule.IO.ChemDataWriter,
 			result = Math.abs(massNum) + result;
 
 		var simpleOrgAtom = false;
-		if (!explicitHCount && !charge && !massNum && !schiralRot && !radical)  // no special property is set
+		if (/*!explicitHCount*/!outputExplicitH && !charge && !massNum && !schiralRot && !radical)  // no special property is set
 		{
 			if ((!isAromatic &&SMI.ORGAN_SUBSET_ATOMS.indexOf(symbol) >= 0)
 				|| (isAromatic && SMI.AROMATIC_SUBSET_ATOMS.indexOf(symbol) >= 0))
@@ -560,6 +644,23 @@ Kekule.IO.SmilesMolWriter = Class.create(Kekule.IO.ChemDataWriter,
 		}
 		if (!simpleOrgAtom)
 			result = SMI.ATOM_BRACKET_LEFT + result + SMI.ATOM_BRACKET_RIGHT;
+		return result;
+	},
+	/** @private */
+	_getNodeHydrogenCount: function(node, options)
+	{
+		// bonded H
+		var result = (node.getLinkedHydrogenAtomsWithSingleBondCount && node.getLinkedHydrogenAtomsWithSingleBondCount(true)) || 0;
+		// explicit H
+		var explicitHCount = node.getExplicitHydrogenCount && node.getExplicitHydrogenCount();
+		if (!options.ignoreExplicitHydrogens)
+			result += (explicitHCount || 0)
+		// implicit H
+		if (Kekule.ObjUtils.isUnset(explicitHCount) && !options.ignoreImplicitHydrogens)
+		{
+			var implicitHCount = node.getImplicitHydrogenCount && node.getImplicitHydrogenCount();
+			result += (implicitHCount || 0);
+		}
 		return result;
 	},
 	/** @private */

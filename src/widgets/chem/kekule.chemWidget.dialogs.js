@@ -194,7 +194,8 @@ Kekule.ChemWidget.LoadDataDialog = Class.create(Kekule.Widget.Dialog,
 				if (sFileExt)
 					text += ' (' + sFileExt + ')';
 				result.push({
-					'value': idInfo.mimeType, //idInfo.id,
+					'value': idInfo.id,
+					'formatId': idInfo.id,
 					'text': text,
 					'title': idInfo.mimeType,
 					'data': idInfo
@@ -296,7 +297,7 @@ Kekule.ChemWidget.LoadDataDialog = Class.create(Kekule.Widget.Dialog,
 		var chemObj;
 		try
 		{
-			if (e.success && data && fileName)
+			if (e.success && Kekule.ObjUtils.notUnset(data) && fileName)
 			{
 				//console.log('load', data);
 				/*
@@ -326,12 +327,16 @@ Kekule.ChemWidget.LoadDataDialog = Class.create(Kekule.Widget.Dialog,
 	/** @ignore */
 	close: function(/*$super, */result)
 	{
-		if (!this.getChemObj())  // chemObj not load by file, need to analysis direct input data
-		{
+		var dataDetails = this.getDataDetails();
+		if (!dataDetails || (!dataDetails.data && !dataDetails.fileName))  // not closed by child file dialog
+		{  // feed dataDetails before closing
 			if (this.isPositiveResult(result))
 			{
 				var data = this._dataEditor.getValue();
-				var mimeType = this._formatSelector.getValue();
+				//var mimeType = this._formatSelector.getValue();
+				var formatData = this._formatSelector.getSelectedItemData();
+				var formatId = formatData.id;
+				var mimeType = formatData.mimeType;
 				try
 				{
 					/*
@@ -341,7 +346,7 @@ Kekule.ChemWidget.LoadDataDialog = Class.create(Kekule.Widget.Dialog,
 					else
 						Kekule.error(Kekule.$L('ErrorMsg.LOAD_CHEMDATA_FAILED'));
 					*/
-					this.setPropStoreFieldValue('dataDetails', {'data': data, 'mimeType': mimeType});
+					this.setPropStoreFieldValue('dataDetails', {'data': data, 'mimeType': mimeType, 'formatId': formatId});
 				}
 				catch(e)
 				{

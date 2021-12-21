@@ -700,6 +700,11 @@ Kekule.Render.Base2DRenderer = Class.create(Kekule.Render.CompositeRenderer,  //
 		else
 			return drawer.drawEx(this.getActualTargetContext(context), coord, richText, /*op*/ options /*, this.getRenderConfigs()*/);
 	},
+	measureRichText: function(context, coord, richText, options)
+	{
+		var drawer = this.getRichTextDrawer();
+		return drawer.measure(context, coord, richText, options);
+	},
 	drawImage: function(context, src, baseCoord, size, options, callback)
 	{
 		var self = this;
@@ -915,7 +920,7 @@ Kekule.Render.ChemObj2DRenderer = Class.create(Kekule.Render.Base2DRenderer,
 		var invTransformMatrix = Kekule.CoordUtils.calcInverseTransform2DMatrix(result);
 
 		drawOptions.transformParams.transformMatrix = transformMatrix;
-		drawOptions.transformParams.invTransformMtrix = invTransformMatrix;
+		drawOptions.transformParams.invTransformMatrix = invTransformMatrix;
 
 		this.getRenderCache(context).transformParams = result;
 		this.getRenderCache(context).transformMatrix = transformMatrix;
@@ -923,7 +928,30 @@ Kekule.Render.ChemObj2DRenderer = Class.create(Kekule.Render.Base2DRenderer,
 
 		//console.log('transform params', drawOptions.transformParams);
 
+		// also calculate and store the contextRefLength, it may used by child renderers
+		var contextRefLengthes = this.calcContextRefLengthes(context, drawOptions, transformMatrix);
+		drawOptions.contextRefLengthes = {
+			'x': contextRefLengthes.contextRefLengthX,
+			'y': contextRefLengthes.contextRefLengthY,
+			'xy': contextRefLengthes.contextRefLengthXY
+		};
+
 		return result;
+	},
+
+	/** @private */
+	calcContextRefLengthes: function(context, drawOptions, transformMatrix)
+	{
+		var refLength = drawOptions.defScaleRefLength;
+		var coord0 = CU.transform2DByMatrix({x: 0, y: 0}, transformMatrix);
+		var coord1 = CU.transform2DByMatrix({x: refLength, y: 0}, transformMatrix);
+		var coord2 = CU.transform2DByMatrix({x: 0, y: refLength}, transformMatrix);
+		var coord3 = CU.transform2DByMatrix({x: refLength, y: refLength}, transformMatrix);
+		return {
+			'contextRefLengthX': CU.getDistance(coord1, coord0),
+			'contextRefLengthY': CU.getDistance(coord2, coord0),
+			'contextRefLengthXY': CU.getDistance(coord3, coord0) / Math.sqrt(2)
+		}
 	},
 
 	/** @private */
@@ -3942,15 +3970,10 @@ Kekule.Render.ChemCtab2DRenderer = Class.create(Kekule.Render.Ctab2DRenderer,
 			}
 
 			var currGap = lineGap;
-
-			if (currGap > maxGap)
-				maxGap = currGap;
-			if (currGap < minGap)
-				minGap = currGap;
+			var edgeStrokeWidthSum = 0;
 
 			var averCoord1 = {'x': 0, 'y': 0};
 			var averCoord2 = {'x': 0, 'y': 0};
-			var maxGap = 0, minGap = 0;
 
 			var realDrawParams = [];
 			for (var i = 0; i < lineCount; ++i)
@@ -3996,6 +4019,10 @@ Kekule.Render.ChemCtab2DRenderer = Class.create(Kekule.Render.Ctab2DRenderer,
 					'arrowParams': arrowParams,
 					'drawOptions': localOptions
 				});
+
+				if (i === 0 || i === lineCount - 1)
+					edgeStrokeWidthSum += strokeWidth / 2;
+
 				if (lineParams[i].isBold)
 					currGap = lineGap + Math.floor(strokeWidth / 2);
 				else
@@ -4026,7 +4053,10 @@ Kekule.Render.ChemCtab2DRenderer = Class.create(Kekule.Render.Ctab2DRenderer,
 
 			averCoord1 = Kekule.CoordUtils.divide(averCoord1, lineCount);
 			averCoord2 = Kekule.CoordUtils.divide(averCoord2, lineCount);
-			var boundInfo = this.createLineBoundInfo(averCoord1, averCoord2, maxGap - minGap);
+			//var boundInfo = this.createLineBoundInfo(averCoord1, averCoord2, maxGap - minGap);
+
+			var totalLineWidth = lineGap * Math.abs(adjusts[adjusts.length - 1] - adjusts[0]) + edgeStrokeWidthSum;
+			var boundInfo = this.createLineBoundInfo(averCoord1, averCoord2, totalLineWidth);
 		}
 
 		var result = {'element': group || line, 'boundInfo': boundInfo};
@@ -4958,7 +4988,7 @@ Kekule.Render.ChemSpace2DRenderer = Class.create(Kekule.Render.CompositeObj2DRen
 	/** @private */
 	doEstimateSelfObjBox: function(/*$super, */context, options, allowCoordBorrow)
 	{
-		var size = this.getChemObj().getSize2D();
+		var size = this.getChemObj().getSize2D() || {};
 		if (size.x && size.y && options.useExplicitSpaceSize)
 		{
 			var result = {

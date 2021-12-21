@@ -9,7 +9,7 @@
 var Kekule = {
 	LIBNAME: 'Kekule.js',
 	LIBNAME_CORE: 'Kekule',
-	VERSION: '0.9.6.21030300',
+	VERSION: '0.9.8.21102100',
 	/**
 	 * A flag that indicate whether all essential Kekule modules are loaded into document.
 	 * @ignore
@@ -205,7 +205,7 @@ Kekule.environment = {
 	variables: {},
 	getEnvVar: function(key)
 	{
-		return Kekule.environment.variables[key];
+		return Kekule.environment.variables[key] || (Kekule.$jsRoot['_kekule_environment_'] && Kekule.$jsRoot['_kekule_environment_'][key]);
 	},
 	setEnvVar: function(key, value)
 	{

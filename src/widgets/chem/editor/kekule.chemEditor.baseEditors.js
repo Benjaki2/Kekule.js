@@ -113,7 +113,9 @@ Kekule.globalOptions.add('chemWidget.editor', {
 });
 Kekule.globalOptions.add('chemWidget.editor.issueChecker', {
 	'enableAutoIssueCheck': true,
-	'enableAutoScrollToActiveIssue': true
+	'enableAutoScrollToActiveIssue': true,
+	'enableIssueMarkerHint': true,
+	'durationLimit': 50  // issue check must be finished in 50ms, avoid blocking the UI
 });
 
 /**
@@ -140,6 +142,7 @@ Kekule.globalOptions.add('chemWidget.editor.issueChecker', {
  * @property {Kekule.IssueCheck.CheckResult} activeIssueCheckResult Current selected issue check result in issue inspector.
  * @property {Bool} showAllIssueMarkers Whether all issue markers shouled be marked in editor.
  *   Note, the active issue will always be marked.
+ * @property {Bool} enableIssueMarkerHint Whether display hint text on issue markers.
  * @property {Bool} enableAutoScrollToActiveIssue Whether the editor will automatically scroll to the issue object when selecting in issue inspector.
  * @property {Bool} enableOperContext If this property is set to true, object being modified will be drawn in a
  *   separate context to accelerate the interface refreshing.
@@ -188,6 +191,12 @@ Kekule.globalOptions.add('chemWidget.editor.issueChecker', {
  * @event
  */
 /**
+ * Invoked when the pointer (usually the mouse) hovering on basic objects(s) in editor.
+ * Event param of it has field {objs}. When the pointer move out of the obj, the objs field will be a empty array.
+ * @name Kekule.Editor.BaseEditor#hoverOnObjs
+ * @event
+ */
+	/**
  * Invoked when the selection in editor has been changed.
  * @name Kekule.Editor.BaseEditor#selectionChange
  * @event
@@ -445,6 +454,7 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			'setter': function(value) { this.setHotTrackedObjs(value); }
 		});
 
+		this.defineProp('hoveredBasicObjs', {'dataType': DataType.ARRAY, 'serializable': false});  // a readonly array caching the basic objects at current pointer position
 
 		this.defineProp('enableOperContext', {'dataType': DataType.BOOL,
 			'setter': function(value)
@@ -482,7 +492,17 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		});
 		this.defineProp('enableIssueCheck', {'dataType': DataType.BOOL,
 			'getter': function() { return this.getIssueCheckExecutor().getEnabled(); },
-			'setter': function(value) { this.getIssueCheckExecutor().setEnabled(!!value); }
+			'setter': function(value) {
+				this.getIssueCheckExecutor().setEnabled(!!value);
+				if (!value)  // when disable issue check, clear the check results
+				{
+					this.setIssueCheckResults(null);
+				}
+			}
+		});
+		this.defineProp('issueCheckDurationLimit', {'dataType': DataType.NUMBER,
+			'getter': function() { return this.getIssueCheckExecutor().getDurationLimit(); },
+			'setter': function(value) { this.getIssueCheckExecutor().setDurationLimit(value); }
 		});
 		this.defineProp('enableAutoIssueCheck', {'dataType': DataType.BOOL,
 			'setter': function(value)
@@ -531,6 +551,7 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			  }
 			}
 		});
+		this.defineProp('enableIssueMarkerHint', {'dataType': DataType.BOOL});
 
 		this.defineProp('enableGesture', {'dataType': DataType.BOOL,
 			'setter': function(value)
@@ -622,8 +643,9 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			'getter': function()
 			{
 				var result = this.getPropStoreFieldValue('uiDrawBridge');
-				if (!result)
+				if (!result && !this.__$uiDrawBridgeInitialized$__)
 				{
+					this.__$uiDrawBridgeInitialized$__ = true;
 					result = this.createUiDrawBridge();
 					this.setPropStoreFieldValue('uiDrawBridge', result);
 				}
@@ -734,6 +756,8 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		this.setEnableAutoIssueCheck(getGlobalOptionValue('chemWidget.editor.issueChecker.enableAutoIssueCheck', true));
 		this.setEnableAutoScrollToActiveIssue(getGlobalOptionValue('chemWidget.editor.issueChecker.enableAutoScrollToActiveIssue', true));
 		this.setIssueCheckerIds(getGlobalOptionValue('chemWidget.editor.issueChecker.issueCheckerIds', [ICIDs.ATOM_VALENCE, ICIDs.BOND_ORDER, ICIDs.NODE_DISTANCE_2D]));
+		this.setIssueCheckDurationLimit(getGlobalOptionValue('chemWidget.editor.issueChecker.durationLimit') || null);
+		this.setEnableIssueMarkerHint(getGlobalOptionValue('chemWidget.editor.issueChecker.enableIssueMarkerHint') || this.getEnableAutoIssueCheck());
 	},
 	/** @private */
 	_defineUiMarkerProp: function(propName, uiMarkerCollection)
@@ -799,6 +823,9 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			{
 				result.push(this.getIssueCheckUiMarker(errorLevels[i]));
 			}
+			var activeMarker = this.getActiveIssueCheckUiMarker();
+			if (activeMarker)
+				result.push(activeMarker);
 			return result;
 		}
 	},
@@ -1128,40 +1155,43 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		*/
 		var result = this.tryApplySuper('repaint', [ops])  /* $super(ops) */;
 
-		// after paint the new obj the first time, save up the transform params (especially the translates)
-		if (!this._initialRenderTransformParams)
+		if (this.isRenderable())
 		{
-			this._initialRenderTransformParams = this.getPainter().getActualInitialRenderTransformOptions(this.getObjContext());
-			/*
-			if (transParam)
+			// after paint the new obj the first time, save up the transform params (especially the translates)
+			if (!this._initialRenderTransformParams)
 			{
-				var trans = {}
-				var unitLength = transParam.unitLength || 1;
-				if (Kekule.ObjUtils.notUnset(transParam.translateX))
-					trans.translateX = transParam.translateX / unitLength;
-				if (Kekule.ObjUtils.notUnset(transParam.translateY))
-					trans.translateY = transParam.translateY / unitLength;
-				if (Kekule.ObjUtils.notUnset(transParam.translateZ))
-					trans.translateZ = transParam.translateZ / unitLength;
+				this._initialRenderTransformParams = this.getPainter().getActualInitialRenderTransformOptions(this.getObjContext());
+				/*
+				if (transParam)
+				{
+					var trans = {}
+					var unitLength = transParam.unitLength || 1;
+					if (Kekule.ObjUtils.notUnset(transParam.translateX))
+						trans.translateX = transParam.translateX / unitLength;
+					if (Kekule.ObjUtils.notUnset(transParam.translateY))
+						trans.translateY = transParam.translateY / unitLength;
+					if (Kekule.ObjUtils.notUnset(transParam.translateZ))
+						trans.translateZ = transParam.translateZ / unitLength;
 
-				if (transParam.center)
-					trans.center = transParam.center;
+					if (transParam.center)
+						trans.center = transParam.center;
 
-				//var zoom = transParam.zoom || 1;
-				var zoom = 1;
+					//var zoom = transParam.zoom || 1;
+					var zoom = 1;
 
-				trans.scaleX = transParam.scaleX / zoom;
-				trans.scaleY = transParam.scaleY / zoom;
-				trans.scaleZ = transParam.scaleZ / zoom;
+					trans.scaleX = transParam.scaleX / zoom;
+					trans.scaleY = transParam.scaleY / zoom;
+					trans.scaleZ = transParam.scaleZ / zoom;
 
-				this._initialRenderTransformParams = trans;
-				console.log(this._initialRenderTransformParams, this);
+					this._initialRenderTransformParams = trans;
+					console.log(this._initialRenderTransformParams, this);
+				}
+				*/
 			}
-			*/
-		}
 
-		// redraw ui markers
-		this.recalcUiMarkers();
+			// redraw ui markers
+			this.recalcUiMarkers();
+		}
 
 		return result;
 	},
@@ -1236,6 +1266,9 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			this.getOperHistory().clear();
 		this.tryApplySuper('doLoad', [chemObj])  /* $super(chemObj) */;
 		this._objChanged = false;
+
+		// clear hovered object cache
+		this.setPropStoreFieldValue('hoveredBasicObjs', null);
 
 		// clear issue results
 		this.setIssueCheckResults(null);
@@ -1428,7 +1461,10 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		var result = Kekule.Render.DrawBridge2DMananger.getPreferredBridgeInstance();
 		if (!result)   // can not find suitable draw bridge
 		{
-			Kekule.error(/*Kekule.ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED*/Kekule.$L('ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED'));
+			//Kekule.error(Kekule.$L('ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED'));
+			var errorMsg = Kekule.Render.DrawBridge2DMananger.getUnavailableMessage() || Kekule.error(Kekule.$L('ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED'));
+			if (errorMsg)
+				this.reportException(errorMsg, Kekule.ExceptionLevel.NOT_FATAL_ERROR);
 		}
 		return result;
 	},
@@ -1805,11 +1841,11 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		}
 		else
 		{
-			this.requestAutoCheckIssuesIfNecessary();
-
-			//console.log('object changed');
+			//console.log('object changed', objDetails);
 			var updateObjs = Kekule.Render.UpdateObjUtils._extractObjsOfUpdateObjDetails(a);
 			this.doObjectsChanged(a, updateObjs);
+			// IMPORTANT: must do issue check after the doObjectsChanged method (invoking repainting)
+			this.requestAutoCheckIssuesIfNecessary();
 			this.invokeEvent('editObjsUpdated', {'details': Object.extend({}, objDetails)});
 		}
 
@@ -2477,6 +2513,42 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 
 	//////////////////// methods about UI markers ///////////////////////////////
 	/**
+	 * Returns the ui markers at screen coord.
+	 * @param {Hash} screenCoord
+	 * @param {Float} boundInflation
+	 * @param {Array} filterClasses
+	 * @returns {Array}
+	 */
+	getUiMarkersAtCoord: function(screenCoord, boundInflation, filterClasses)
+	{
+		var markers = this.getUiMarkers();
+		var filterFunc = (filterClasses && filterClasses.length)? function(marker) {
+			for (var i = 0, l = filterClasses.length; i < l; ++i)
+			{
+				if (marker instanceof filterClasses[i])
+					return true;
+			}
+			return false;
+		}: null;
+
+		var SU = Kekule.Render.MetaShapeUtils;
+		var result = [];
+		for (var i = markers.getMarkerCount() - 1; i >= 0; --i)
+		{
+			var marker = markers.getMarkerAt(i);
+			if (marker.getVisible())
+			{
+				if (!filterFunc || filterFunc(marker))
+				{
+					var shapeInfo = marker.shapeInfo;
+					if (SU.isCoordInside(screenCoord, shapeInfo, boundInflation))
+						result.push(marker);
+				}
+			}
+		}
+		return result;
+	},
+	/**
 	 * Notify that currently is modifing UI markers and the editor need not to repaint them.
 	 */
 	beginUpdateUiMarkers: function()
@@ -2505,16 +2577,18 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 	recalcUiMarkers: function()
 	{
 		//this.setHotTrackedObj(null);
-		this.beginUpdateUiMarkers();
-		try
+		if (this.getUiDrawBridge())
 		{
-			this.recalcHotTrackMarker();
-			this.recalcSelectionAreaMarker();
-			this.recalcIssueCheckUiMarkers();
-		}
-		finally
-		{
-			this.endUpdateUiMarkers();
+			this.beginUpdateUiMarkers();
+			try
+			{
+				this.recalcHotTrackMarker();
+				this.recalcSelectionAreaMarker();
+				this.recalcIssueCheckUiMarkers();
+			} finally
+			{
+				this.endUpdateUiMarkers();
+			}
 		}
 	},
 	/** @private */
@@ -2522,9 +2596,12 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 	{
 		if (this.isUpdatingUiMarkers())
 			return;
-		this.clearUiContext();
-		var drawParams = this.calcDrawParams();
-		this.getUiPainter().draw(this.getUiContext(), drawParams.baseCoord, drawParams.drawOptions);
+		if (this.getUiDrawBridge() && this.getUiContext())
+		{
+			this.clearUiContext();
+			var drawParams = this.calcDrawParams();
+			this.getUiPainter().draw(this.getUiContext(), drawParams.baseCoord, drawParams.drawOptions);
+		}
 	},
 	/**
 	 * Create a new marker based on shapeInfo.
@@ -2751,7 +2828,84 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		this.setHotTrackedObjs(this.getHotTrackedObjs());
 	},
 
-	// methods about error checking marker
+	// method about chem object hint
+	/**
+	 * Update the hint of chem object.
+	 * This method may be called when hovering on some basic objects
+	 * @param {String} hint
+	 * @private
+	 */
+	updateHintForChemObject: function(hint)
+	{
+		var elem = this.getEditClientElem();
+		if (elem)
+		{
+			var sHint = hint || '';
+			if (sHint && this.updateHintForChemObject._cache == sHint)   // same as last non-empty hint, must explicitly change hint a little, otherwise the hint may not be displayed in client area
+			{
+				sHint += '\f';  // add a hidden char
+			}
+			elem.title = sHint;
+			if (sHint)
+				this.updateHintForChemObject._cache = sHint;
+		}
+	},
+	/**
+	 * Returns the hint value from a chem object.
+	 * Descendants may override this method.
+	 * @param {Kekule.ChemObject} obj
+	 * @returns {String}
+	 */
+	getChemObjHint: function(obj)
+	{
+		return null;
+	},
+	/**
+	 * Returns the hint value from a set of chem objects.
+	 * Descendants may override this method.
+	 * @param {Kekule.ChemObject} obj
+	 * @returns {String}
+	 */
+	getChemObjsHint: function(objs)
+	{
+		var hints = [];
+		for (var i = 0, l = objs.length; i < l; ++i)
+		{
+			var hint = this.getChemObjHint(objs[i]);
+			if (hint)
+			{
+				// hints.push(hint);
+				AU.pushUnique(hints, hint);  // avoid show duplicated hint texts
+			}
+		}
+		// issue hints
+		var issueHints = this._getChemObjsRelatedIssuesHints(objs);
+		if (issueHints.length)
+		{
+			//hints = hints.concat(issueHints);
+			AU.pushUnique(hints, issueHints);  // avoid show duplicated hint texts
+		}
+
+		return hints.length? hints.join('\n'): null;
+	},
+
+	/** @private */
+	_getChemObjsRelatedIssuesHints: function(objs)
+	{
+		var result = [];
+		if (this.getEnableIssueMarkerHint() && this.getEnableIssueCheck())
+		{
+			var issueItems = this.getObjectsRelatedIssueItems(objs, true) || [];
+			for (var i = 0, l = issueItems.length; i < l; ++i)
+			{
+				var msg = issueItems[i].getMessage();
+				AU.pushUnique(result, msg);  // avoid show duplicated hint texts
+			}
+		}
+		return result;
+	},
+
+	// methods about issue markers
 	/** @private */
 	issueCheckResultsChanged: function()
 	{
@@ -2854,7 +3008,7 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 				var configs = this.getEditorConfigs().getUiMarkerConfigs();
 				var styleConfigs = configs.getIssueCheckMarkerColors()[levelName];
 				var drawStyles = {
-					'strokeColor': isActive ? styleConfigs.activeStokeColor : styleConfigs.strokeColor,
+					'strokeColor': isActive ? styleConfigs.activeStrokeColor : styleConfigs.strokeColor,
 					'strokeWidth': isActive ? configs.getIssueCheckActiveMarkerStrokeWidth() : configs.getIssueCheckMarkerStrokeWidth(),
 					'fillColor': isActive ? styleConfigs.activeFillColor : styleConfigs.fillColor,
 					'opacity': isActive ? configs.getIssueCheckActiveMarkerOpacity() : configs.getIssueCheckMarkerOpacity()
@@ -2937,6 +3091,76 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		var markers = this.getAllIssueCheckUiMarkers() || [];
 		for (var i = 0, l = markers.length; i < l; ++i)
 			this.hideUiMarker(markers[i]);
+	},
+	/**
+	 * Check if obj (or its ancestor) is (one of) the targets of issueResult.
+	 * @param {Kekule.ChemObject} obj
+	 * @param {Kekule.IssueCheck.CheckResult} issueResult
+	 * @param {Bool} checkAncestors
+	 * @returns {Bool}
+	 */
+	isObjectRelatedToIssue: function(obj, issueResult, checkAncestors)
+	{
+		var targets = issueResult.getTargets() || [];
+		if (targets.indexOf(obj) >= 0)
+			return true;
+		else if (checkAncestors)
+		{
+			var parent = obj.getParent();
+			return parent? this.isObjectRelatedToIssue(parent, issueResult, checkAncestors): false;
+		}
+	},
+	/**
+	 * Returns the issue items related to obj.
+	 * @param {Kekule.ChemObject} obj
+	 * @param {Bool} checkAncestors
+	 * @returns {Array}
+	 */
+	getObjectIssueItems: function(obj, checkAncestors)
+	{
+		var checkResults = this.getIssueCheckResults() || [];
+		if (!checkResults.length || !this.getEnableIssueCheck())
+			return [];
+		else
+		{
+			var result = [];
+			for (var i = 0, l = checkResults.length; i < l; ++i)
+			{
+				var item = checkResults[i];
+				if (this.isObjectRelatedToIssue(obj, item, checkAncestors))
+					result.push(item);
+			}
+			return result;
+		}
+	},
+	/**
+	 * Returns the issue items related to a series of objects.
+	 * @param {Array} objs
+	 * @param {Bool} checkAncestors
+	 * @returns {Array}
+	 */
+	getObjectsRelatedIssueItems: function(objs, checkAncestors)
+	{
+		var checkResults = this.getIssueCheckResults() || [];
+		if (!checkResults.length || !this.getEnableIssueCheck())
+			return [];
+
+		var result = [];
+		// build the while object set that need to check issue items
+		var totalObjs = [].concat(objs);
+		if (checkAncestors)
+		{
+			for (var i = 0, l = objs.length; i < l; ++i)
+			{
+				AU.pushUnique(totalObjs, objs[i].getParentList());
+			}
+		}
+		for (var i = 0, l = totalObjs.length; i < l; ++i)
+		{
+			var issueItems = this.getObjectIssueItems(totalObjs[i], false);
+			AU.pushUnique(result, issueItems);
+		}
+		return result;
 	},
 
 	// methods about selecting marker
@@ -3850,7 +4074,7 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 	 */
 	removeFromSelection: function(param)
 	{
-		if (!param)
+		if (!param || !param.length)
 			return;
 		var objs = DataType.isArrayValue(param)? param: [param];
 		this.beginUpdateSelection();
@@ -4471,31 +4695,31 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			if (toSys === S.SCREEN)
 				return coord;
 			else if (toSys === S.CONTEXT)
-				return this.getObjDrawBridge().transformScreenCoordToContext(this.getObjContext(), coord);
+				return this.getObjDrawBridge()? this.getObjDrawBridge().transformScreenCoordToContext(this.getObjContext(), coord): coord;
 			else  // S.OBJ
 			{
-				var contextCoord = this.getObjDrawBridge().transformScreenCoordToContext(this.getObjContext(), coord);
-				return this.getRootRenderer().transformCoordToObj(this.getObjContext(), this.getChemObj(), contextCoord);
+				var contextCoord = this.getObjDrawBridge()? this.getObjDrawBridge().transformScreenCoordToContext(this.getObjContext(), coord): coord;
+				return this.getObjContext()? this.getRootRenderer().transformCoordToObj(this.getObjContext(), this.getChemObj(), contextCoord): coord;
 			}
 		}
 		else if (fromSys === S.CONTEXT)
 		{
 			if (toSys === S.SCREEN)
-				return this.getObjDrawBridge().transformContextCoordToScreen(this.getObjContext(), coord);
+				return this.getObjDrawBridge()? this.getObjDrawBridge().transformContextCoordToScreen(this.getObjContext(), coord): coord;
 			else if (toSys === S.CONTEXT)
 				return coord;
 			else  // S.OBJ
-				return this.getRootRenderer().transformCoordToObj(this.getObjContext(), this.getChemObj(), coord);
+				return this.getObjContext()? this.getRootRenderer().transformCoordToObj(this.getObjContext(), this.getChemObj(), coord): coord;
 		}
 		else  // fromSys === S.OBJ
 		{
 			if (toSys === S.SCREEN)
 			{
 				var contextCoord = this.getRootRenderer().transformCoordToContext(this.getObjContext(), this.getChemObj(), coord);
-				return this.getObjDrawBridge().transformContextCoordToScreen(this.getObjContext(), contextCoord);
+				return this.getObjDrawBridge()? this.getObjDrawBridge().transformContextCoordToScreen(this.getObjContext(), contextCoord): coord;
 			}
 			else if (toSys === S.CONTEXT)
-				return this.getRootRenderer().transformCoordToContext(this.getObjContext(), this.getChemObj(), coord);
+				return this.getObjContext()? this.getRootRenderer().transformCoordToContext(this.getObjContext(), this.getChemObj(), coord): coord;
 			else  // S.OBJ
 				return coord;
 		}
@@ -5262,8 +5486,32 @@ Kekule.Editor.BaseEditor = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		if (['pointerdown', 'pointermove', 'pointerup'].indexOf(evType) >= 0)
 		{
 			this.setCurrPointerType(e.pointerType);
+			if (evType === 'pointermove' && this.isRenderable())
+			{
+				var coord = this._getEventMouseCoord(e, this.getCoreElement());  // coord based on editor client element
+				var hoveredObjs = this.getBasicObjectsAtCoord(coord, this.getCurrBoundInflation()) || [];
+				var oldHoveredObjs = this.getHoveredBasicObjs();
+				this.setPropStoreFieldValue('hoveredBasicObjs', hoveredObjs);
+				// if there are differences between oldHoveredObjs and hoveredObjs
+				if (!oldHoveredObjs || hoveredObjs.length !== oldHoveredObjs.length || AU.intersect(oldHoveredObjs, hoveredObjs).length !== hoveredObjs.length)
+				{
+					this.notifyHoverOnObjs(hoveredObjs);
+				}
+			}
 		}
 		return this.tryApplySuper('doBeforeDispatchUiEvent', [e])  /* $super(e) */;
+	},
+	/**
+	 * Called when the pointer hover on/off objects.
+	 * @param {Array} hoveredObjs An empty array means move out off objects.
+	 * @private
+	 */
+	notifyHoverOnObjs: function(hoveredObjs)
+	{
+		// when hovering on objects, update the chem object hint of editor
+		var hint = this.getChemObjsHint(hoveredObjs);
+		this.updateHintForChemObject(hint);
+		this.invokeEvent('hoverOnObjs', {'objs': hoveredObjs});
 	},
 	/**
 	 * React to a HTML event to find if it is a registered hotkey, then react to it when necessary.
@@ -5435,6 +5683,44 @@ Kekule.Editor.BaseEditorBaseIaController = Class.create(Kekule.Widget.Interactio
 	{
 		this.tryApplySuper('initialize', [editor])  /* $super(editor) */;
 	},
+	/** @private */
+	_defineEditorConfigBasedProperty: function(propName, configPath, options)
+	{
+		var defOps = {
+			'dataType': DataType.VARIANT,
+			'serializable': false,
+			/*
+			'setter': function(value)
+			{
+				var configs = this.getEditorConfigs();
+				configs.setCascadePropValue(configPath, value);
+			}
+			*/
+			'setter': null
+		};
+		if (options && options.overwrite)
+		{
+			defOps.getter = function ()
+			{
+				var v = this.getPropStoreFieldValue(propName);
+				var configs = this.getEditorConfigs();
+				return v && configs.getCascadePropValue(configPath);
+			};
+			defOps.setter = function(value)
+			{
+				this.setPropStoreFieldValue(propName, value);
+			}
+		}
+		else
+		{
+			defOps.getter = function () {
+				var configs = this.getEditorConfigs();
+				return configs.getCascadePropValue(configPath);
+			};
+		}
+		var ops = Object.extend(defOps, options || {});
+		this.defineProp(propName, ops);
+	},
 	/**
 	 * Returns the preferred id for this controller.
 	 */
@@ -5581,7 +5867,7 @@ Kekule.Editor.BaseEditorIaController = Class.create(Kekule.Editor.BaseEditorBase
 	{
 		return null;
 	},
-	/** @private */
+	/* @private */
 	getAllInteractableObjsAtScreenCoord: function(coord)
 	{
 		return this.getEditor().getBasicObjectsAtCoord(coord, this.getCurrBoundInflation(), null, this.getInteractableTargetClasses());
@@ -5590,6 +5876,20 @@ Kekule.Editor.BaseEditorIaController = Class.create(Kekule.Editor.BaseEditorBase
 	getTopmostInteractableObjAtScreenCoord: function(coord)
 	{
 		var objs = this.getAllInteractableObjsAtScreenCoord(coord);
+		if (objs)
+		{
+			for (var i = 0, l = objs.length; i < l; ++i)
+			{
+				if (this.canInteractWithObj(objs[i]))
+					return objs[i];
+			}
+		}
+		return null;
+	},
+	/** @private */
+	getTopmostInteractableObjAtCurrPointerPos: function()
+	{
+		var objs = this.getEditor().getHoveredBasicObjs();
 		if (objs)
 		{
 			for (var i = 0, l = objs.length; i < l; ++i)
@@ -5720,8 +6020,11 @@ Kekule.Editor.BaseEditorIaController = Class.create(Kekule.Editor.BaseEditorBase
 		//this.getEditor().setCurrPointerType(e.pointerType);
 
 		//console.log(e.getTarget().id);
+		/*
 		var coord = this._getEventMouseCoord(e);
 		var obj = this.getTopmostInteractableObjAtScreenCoord(coord);
+		*/
+		var obj = this.getTopmostInteractableObjAtCurrPointerPos();  // read the hovered obj directly from the editor's cached property
 		if (!this.getManuallyHotTrack())
 		{
 			/*
@@ -7138,11 +7441,16 @@ Kekule.Editor.BasicManipulationIaController = Class.create(Kekule.Editor.BaseEdi
 	{
 		var C = Kekule.CoordUtils;
 		var newInfoMap = this.getManipulateObjCurrInfoMap();
+		var editor = this.getEditor();
 
 		var isMovingOneStickNode = this._isManipulatingSingleStickedObj(manipulatingObjs);
 
 		var isDirectManipulateSingleObj = this.isDirectManipulating() && (manipulatingObjs.length === 1);
-		var followPointerCoord = isDirectManipulateSingleObj && this.getEditorConfigs().getInteractionConfigs().getFollowPointerCoordOnDirectManipulatingSingleObj();
+		var manipulatingObjHasSize = isDirectManipulateSingleObj?
+			(manipulatingObjs[0] && manipulatingObjs[0].getSizeOfMode && manipulatingObjs[0].getSizeOfMode(editor.getCoordMode(), editor.getAllowCoordBorrow())):
+			true;
+		var followPointerCoord = isDirectManipulateSingleObj && !manipulatingObjHasSize   // when the object has size, it can not follow the pointer coord
+			&& this.getEditorConfigs().getInteractionConfigs().getFollowPointerCoordOnDirectManipulatingSingleObj();
 		if (followPointerCoord)
 		{
 			var startCoord = this.getStartCoord();
@@ -7396,6 +7704,8 @@ Kekule.Editor.BasicManipulationIaController = Class.create(Kekule.Editor.BaseEdi
 	/** @ignore */
 	doTestMouseCursor: function(coord, e)
 	{
+		if (!this.getEditor().isRenderable())  // if chem object not painted, do not need to test
+			return '';
 		var result = '';
 		// since client element is not the same to widget element, coord need to be recalculated
 		var c = this._getEventMouseCoord(e, this.getEditor().getEditClientElem());
@@ -7548,21 +7858,6 @@ Kekule.Editor.BasicManipulationIaController = Class.create(Kekule.Editor.BaseEdi
 		this.setBaseCoord(currCoord);
 		this.setStartCoord(currCoord);
 
-		// check if mouse just on an object, if so, direct manipulation mode
-		var hoveredObj = this.getEditor().getTopmostBasicObjectAtCoord(currCoord, this.getCurrBoundInflation());
-		if (hoveredObj && !evokedByTouch)  // mouse down directly on a object
-		{
-			//hoveredObj = hoveredObj.getNearestSelectableObject();
-			if (this.isInAncestorSelectMode())
-				hoveredObj = this.getStandaloneAncestor(hoveredObj);
-			hoveredObj = hoveredObj.getNearestMovableObject();
-			if (this.getEnableMove())
-			{
-				this.doStartDirectManipulate(null, hoveredObj, currCoord);  // call doStartDirectManipulate rather than startDirectManipulate, avoid calling doStartDirectManipulate twice
-				return;
-			}
-		}
-
 		this._lastTransformParams = null;
 
 		var coordRegion = currCoord && this.getEditor().getCoordRegionInSelectionMarker(currCoord);
@@ -7588,6 +7883,24 @@ Kekule.Editor.BasicManipulationIaController = Class.create(Kekule.Editor.BaseEdi
 		else // transform
 		{
 			this._availTransformTypes = availManipulationTypes;  // stores the available transform types
+		}
+
+		if (!isTransform && !isResize && !isRotate)  // when pointer not at resize or rotate position, check if it is directly on an object to evoke direct manipulation
+		{
+			// check if mouse just on an object, if so, direct manipulation mode
+			var hoveredObj = this.getEditor().getTopmostBasicObjectAtCoord(currCoord, this.getCurrBoundInflation());
+			if (hoveredObj && !evokedByTouch)  // mouse down directly on a object
+			{
+				//hoveredObj = hoveredObj.getNearestSelectableObject();
+				if (this.isInAncestorSelectMode())
+					hoveredObj = this.getStandaloneAncestor(hoveredObj);
+				hoveredObj = hoveredObj.getNearestMovableObject();
+				if (this.getEnableMove())
+				{
+					this.doStartDirectManipulate(null, hoveredObj, currCoord);  // call doStartDirectManipulate rather than startDirectManipulate, avoid calling doStartDirectManipulate twice
+					return;
+				}
+			}
 		}
 
 		// check if already has selection and mouse in selection rect first

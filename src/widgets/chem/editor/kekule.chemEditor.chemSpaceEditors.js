@@ -53,25 +53,14 @@ Kekule.globalOptions.add('chemWidget.editor', {
 	'enableGesture': true,
 	'initOnNewDoc': true
 });
-Kekule.globalOptions.add('chemWidget.editor.select', {
-	'enableMagneticMerge': true,
-	'enableNodeMerge': true,
-	'enableNeighborNodeMerge': true,
-	'enableConnectorMerge': true,
-	'enableStructFragmentMerge': true,
-	'enableNodeStick': true,
-	'enableStructFragmentStick': true,
-	'enableConstrainedMove': true,
-	'enableConstrainedRotate': true,
-	'enableConstrainedResize': true,
-	'enableDirectedMove': true
-});
 Kekule.globalOptions.add('chemWidget.editor.molManipulation', {
+	/*
 	'enableMagneticMerge': true,
 	'enableNodeMerge': true,
 	'enableNeighborNodeMerge': true,
 	'enableConnectorMerge': true,
 	'enableStructFragmentMerge': true,
+	*/
 	'enableNodeStick': true,
 	'enableStructFragmentStick': true,
 	'enableConstrainedMove': true,
@@ -284,6 +273,20 @@ Kekule.Editor.ChemSpaceEditor = Class.create(Kekule.Editor.BaseEditor,
 		}
 		else
 			return this.tryApplySuper('getSavingTargetObj')  /* $super() */;
+	},
+	/** @ignore */
+	_cloneSavingTargetObj: function(obj)
+	{
+		var space = this.getChemSpace();
+		var childCount = space.getChildCount();
+		if (childCount === 1 && obj === space.getChildAt(0))
+		{
+			// The objRef properties are related with chemspace, if clone obj only, the relation may be lost
+			var clonedSpace = space.clone(true);
+			return clonedSpace.getChildAt(0);
+		}
+		else
+			return this.tryApplySuper('_cloneSavingTargetObj', [obj]);
 	},
 
 	/** @ignore */
@@ -1941,11 +1944,20 @@ Kekule.Editor.BasicMolManipulationIaController = Class.create(Kekule.Editor.Basi
 	/** @private */
 	initProperties: function()
 	{
+		/*
 		this.defineProp('enableMagneticMerge', {'dataType': DataType.BOOL});
 		this.defineProp('enableNodeMerge', {'dataType': DataType.BOOL});
 		this.defineProp('enableNeighborNodeMerge', {'dataType': DataType.BOOL});
 		this.defineProp('enableConnectorMerge', {'dataType': DataType.BOOL});
 		this.defineProp('enableStructFragmentMerge', {'dataType': DataType.BOOL});
+		*/
+		// now these merge related properties are moved to editor configs, so here we define some overwrite props instead, their value depends on both config settings and local store field values
+		this._defineEditorConfigBasedProperty('enableMagneticMerge', 'interactionConfigs.enableMagneticMerge', {'overwrite': true});
+		this._defineEditorConfigBasedProperty('enableNodeMerge', 'interactionConfigs.enableNodeMerge', {'overwrite': true});
+		this._defineEditorConfigBasedProperty('enableNeighborNodeMerge', 'interactionConfigs.enableNeighborNodeMerge', {'overwrite': true});
+		this._defineEditorConfigBasedProperty('enableConnectorMerge', 'interactionConfigs.enableConnectorMerge', {'overwrite': true});
+		this._defineEditorConfigBasedProperty('enableStructFragmentMerge', 'interactionConfigs.enableStructFragmentMerge', {'overwrite': true});
+
 		//this.defineProp('mergeOperation', {'dataType': 'Kekule.MacroOperation', 'serializable': false});  // store operation of merging nodes
 		//this.defineProp('connectorMergeOperation', {'dataType': 'Kekule.Operation', 'serializable': false});  // store operation of merging
 		this.defineProp('allManipulateObjsMerged', {'dataType': DataType.BOOL, 'serializable': false});  // store whether a merge operation merges all current objects

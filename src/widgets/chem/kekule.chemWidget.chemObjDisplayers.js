@@ -527,9 +527,10 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 			'getter': function(slient)
 			{
 				var result = this.getPropStoreFieldValue('drawBridge');
-				if (!result)
+				if (!result && !this.__$drawBridgeInitialized$__)
 				{
-					result = this.createDrawBridge(slient);
+					this.__$drawBridgeInitialized$__ = true;   // avoid call this.createDrawBridge() multiple times
+					result = this.createDrawBridge(/*slient*/);
 					this.setPropStoreFieldValue('drawBridge', result);
 				}
 				return result;
@@ -686,6 +687,7 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 		}
 		this.setPropStoreFieldValue('drawContext', null);
 		this.setPropStoreFieldValue('drawBridge', null);
+		this.__$drawBridgeInitialized$__ = false;  // important, marks the draw bridge should be reinitialized
 		var newBgColor = this.getBackgroundColorOfType(newType);
 		this.getDrawOptions().moleculeDisplayType = this.getDefaultMoleculeDisplayType(newType);  // reset display type
 		//this.setBackgroundColor(newBgColor);
@@ -840,7 +842,12 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 		if (!result)   // can not find suitable draw bridge
 		{
 			if (!slient)
-				Kekule.error(/*Kekule.ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED*/Kekule.$L('ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED'));
+			{
+				var errorMsg = M.getUnavailableMessage() || Kekule.error(Kekule.$L('ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED'));
+				if (errorMsg)
+					this.reportException(errorMsg, Kekule.ExceptionLevel.NOT_FATAL_ERROR);
+			}
+			// Kekule.error(/*Kekule.ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED*/Kekule.$L('ErrorMsg.DRAW_BRIDGE_NOT_SUPPORTED'));
 		}
 		/* infinite loop, remove this part
 		if (this.getBackgroundColor() && result.setClearColor)
@@ -915,7 +922,8 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 	/** @private */
 	refitDrawContext: function(doNotRepaint)
 	{
-		if (this.getDrawBridge(true) && this.getDrawContext())
+		//if (this.getDrawBridge(true) && this.getDrawContext())
+		if (this.getDrawBridge() && this.getDrawContext())
 		{
 			//var dim = Kekule.HtmlElementUtils.getElemScrollDimension(this.getElement());
 			var dim = Kekule.HtmlElementUtils.getElemClientDimension(this.getDrawContextParentElem());
@@ -1016,11 +1024,20 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 		{
 			old.finalize();
 		}
-		var result = new Kekule.Render.ChemObjPainter(this.getRenderType(), chemObj, this.getDrawBridge());
+		var drawBridge = this.getDrawBridge();
+		var result = drawBridge? (new Kekule.Render.ChemObjPainter(this.getRenderType(), chemObj, this.getDrawBridge())): null;
 		this.setPropStoreFieldValue('painter', result);
 		// create new bound info recorder
 		//this.createNewBoundInfoRecorder(result);
 		return result;
+	},
+	/**
+	 * Returns whether the painter, draw bridge and context are ready, the rendering can be successfully performed.
+	 * @returns {Bool}
+	 */
+	isRenderable: function()
+	{
+		return !!(this.getPainter() && this.getDrawBridge() && this.getDrawContext());
 	},
 	/* @private */
 	/*
@@ -1084,7 +1101,8 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 				*/
 
 				var painter = this.createNewPainter(chemObj);
-				painter.setRenderConfigs(this.getRenderConfigs());
+				if (painter)
+					painter.setRenderConfigs(this.getRenderConfigs());
 
 				/*
 				 var drawOptions = this.getDrawOptions();
@@ -1158,7 +1176,7 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 		{
 			//console.log('generate coords');
 			var is3D = this.getCoordMode() === Kekule.CoordMode.COORD3D;
-			var hasCoords = chemObj.nodesHasCoordOfMode(this.getCoordMode(), this.getAllowCoordBorrow(), true);
+			var hasCoords = (chemObj.getNodeCount() <= 0) || chemObj.nodesHasCoordOfMode(this.getCoordMode(), this.getAllowCoordBorrow(), true);
 			if (!hasCoords)  // auto generate
 			{
 				var serviceName = is3D? Kekule.Calculator.Services.GEN3D: Kekule.Calculator.Services.GEN2D;
@@ -1196,8 +1214,9 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 	 * @param {Variant} data Usually text content.
 	 * @param {String} mimeType
 	 * @param {String} fromUrlOrFileName From which file or url is this data loaded.
+	 * @param {String} formatId
 	 */
-	loadFromData: function(data, mimeType, fromUrlOrFileName)
+	loadFromData: function(data, mimeType, fromUrlOrFileName, formatId)
 	{
 		try
 		{
@@ -1209,7 +1228,11 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 			else
 			{
 				//var ext = fromUrlOrFileName? Kekule.UrlUtils.extractFileExt(fromUrlOrFileName): null;
-				var chemObj = Kekule.IO.loadTypedData(data, mimeType, fromUrlOrFileName);
+				var chemObj;
+				if (formatId)
+					chemObj = Kekule.IO.loadFormatData(data, formatId);
+				else if (mimeType || fromUrlOrFileName)
+					chemObj = Kekule.IO.loadTypedData(data, mimeType, fromUrlOrFileName);
 				if (chemObj)
 				{
 					//this.setChemObj(chemObj);
@@ -1285,7 +1308,8 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 			var doCanonicalize = this._needToCanonicalizeBeforeSaving() && this.getDisplayerConfigs().getIoConfigs().getCanonicalizeBeforeSave();
 			if (doCanonicalize && obj.standardize)  // canonicalize first
 			{
-				var obj = obj.clone? obj.clone(true): obj;  // clone with id
+				//var obj = obj.clone? obj.clone(true): obj;  // clone with id
+				var obj = this._cloneSavingTargetObj(obj);
 				obj.standardize(this.getStandardizationOptions());
 			}
 			if (!dataType)
@@ -1301,6 +1325,12 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 			Kekule.error(/*Kekule.ErrorMsg.NO_SUITABLE_WRITER_FOR_FORMAT*/Kekule.$L('ErrorMsg.NO_SUITABLE_WRITER_FOR_FORMAT'));
 			return null;
 		}
+	},
+	/** @private */
+	_cloneSavingTargetObj: function(obj)
+	{
+		var result = obj.clone? obj.clone(true): obj;  // clone with id
+		return result;
 	},
 	/**
 	 * Return whether this displayer need to canonicalize molecule before save.
@@ -1490,6 +1520,9 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 		if (this.isPainting())  // avoid duplicated repainting
 			return;
 
+		if (!this.isRenderable())
+			return;
+
 		this.beginPaint();
 		try
 		{
@@ -1660,7 +1693,8 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 			color = this.getBackgroundColor();
 		if (color === 'transparent')
 			color = null;
-		var drawBridge = this.getDrawBridge(true);
+		//var drawBridge = this.getDrawBridge(true);
+		var drawBridge = this.getDrawBridge();
 		if (drawBridge && drawBridge.setClearColor)
 		{
 			drawBridge.setClearColor(this.getDrawContext(), color);
@@ -1803,7 +1837,7 @@ Kekule.ChemWidget.ChemObjDisplayer = Class.create(Kekule.ChemWidget.AbstractWidg
 	{
 		var painter = this.getPainter();
 		var drawOptions = this.getDrawOptions();
-		if (painter.supportGeometryOptionChange())
+		if (painter && painter.supportGeometryOptionChange())
 		{
 			var context = this.getDrawContext();
 			painter.changeGeometryOptions(context, drawOptions.baseCoord || this._lastBaseCoord, drawOptions);
@@ -2295,7 +2329,7 @@ Kekule.ChemWidget.ActionDisplayerLoadData = Class.create(Kekule.ChemWidget.Actio
 					//self.doLoadToDisplayer(dialog.getChemObj(), dialog);
 					var dataDetails = dialog.getDataDetails() || {};
 					var displayer = self.getDisplayer();
-					displayer.loadFromData(dataDetails.data, dataDetails.mimeType, dataDetails.fileName);
+					displayer.loadFromData(dataDetails.data, dataDetails.mimeType, dataDetails.fileName, dataDetails.formatId);
 				}
 			}, target, showType]);
 	}

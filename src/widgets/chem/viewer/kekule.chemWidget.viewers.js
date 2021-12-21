@@ -717,7 +717,8 @@ Kekule.ChemWidget.Viewer = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 	/** @ignore */
 	getResizerElement: function()
 	{
-		return this.getDrawContextParentElem();
+		//return this.getDrawContextParentElem();
+		return this.getElement();
 	},
 
 	/** @ignore */
@@ -799,15 +800,30 @@ Kekule.ChemWidget.Viewer = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 		var parentElem = drawParentElem.parentNode;
 		var captionElem = this.getCaptionElem(true);  // do not auto create
 		var dimParent = Kekule.HtmlElementUtils.getElemClientDimension(parentElem);
-		var t, h;
+		//var t, h;
+		// drawParentElem is now position: absolute
 		if (captionElem && this.captionIsShown() && captionElem.parentNode === parentElem)
 		{
 			var dimCaption = Kekule.HtmlElementUtils.getElemClientDimension(captionElem);
+			var h = dimCaption.height || 0;
+			//console.log('here');
+			if (this.getCaptionPos() & Kekule.Widget.Position.TOP)
+			{
+				drawParentElem.style.top = h + 'px';
+				drawParentElem.style.bottom = '0px';
+			}
+			else
+			{
+				drawParentElem.style.top = '0px';
+				drawParentElem.style.bottom = h + 'px';
+			}
+			Kekule.StyleUtils.removeStyleProperty(drawParentElem.style, 'height');
+			/*
 			h = Math.max(dimParent.height - dimCaption.height, 0);  // avoid value < 0
 			t = (this.getCaptionPos() & Kekule.Widget.Position.TOP)? dimCaption.height: 0;
-
 			drawParentElem.style.top = t + 'px';
 			drawParentElem.style.height = h + 'px';
+			*/
 		}
 		else
 		{
@@ -815,10 +831,16 @@ Kekule.ChemWidget.Viewer = Class.create(Kekule.ChemWidget.ChemObjDisplayer,
 			t = 0;
 			h = dimParent.height;
 			*/
+			/*
 			// restore 100% height setting
 			Kekule.StyleUtils.removeStyleProperty(drawParentElem.style, 'top');
 			//Kekule.StyleUtils.removeStyleProperty(drawParentElem.style, 'height');
-			drawParentElem.style.height = dimParent.height + 'px';  // explicit set height, or the height may not be updated in some mobile browsers
+			//drawParentElem.style.height = dimParent.height + 'px';  // explicit set height, or the height may not be updated in some mobile browsers
+			drawParentElem.style.height = '100%';   // some mobile browser has wrong height of parentElem, so here we set it to 100%
+			*/
+			Kekule.StyleUtils.removeStyleProperty(drawParentElem.style, 'top');
+			Kekule.StyleUtils.removeStyleProperty(drawParentElem.style, 'bottom');
+			drawParentElem.style.height = '100%';   // some mobile browser has wrong height of parentElem, so here we set it to 100%
 		}
 
 		//this.refitDrawContext();
@@ -2114,7 +2136,7 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 				this._restraintCoord = this._calcRestraintRotateCoord(clientX, clientY);
 
 				this._initTransform();
-				this.getViewer().setTouchAction('none');
+				//this.getViewer().setTouchAction('none');
 
 				this._requestInteractiveTransform(screenX, screenY);
 			}
@@ -2124,7 +2146,7 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 	_endInteractTransform: function()
 	{
 		this._transformInfo.isTransforming = false;
-		this.getViewer().setTouchAction(null);
+		//this.getViewer().setTouchAction(null);
 		this._doInteractiveTransformEnd();
 	},
 	/** @private */
@@ -2294,6 +2316,7 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 			{
 				// start mouse drag rotation in 3D render mode
 				this._beginInteractTransformAtCoord(e.getScreenX(), e.getScreenY(), e.getClientX(), e.getClientY());
+				//e.preventDefault();
 			}
 		}
 	},
@@ -2304,7 +2327,7 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 			return;
 		if (e.getPointerType() === XEvent.PointerType.TOUCH && e.getButton() === XEvent.MouseButton.LEFT)
 		{
-			this.getViewer().setEnableTouchInteraction(!this.getViewer().getEnableTouchInteraction());
+			//this.getViewer().setEnableTouchInteraction(!this.getViewer().getEnableTouchInteraction());
 			/*
 			if (!this._transformInfo.isTransforming)
 			{
@@ -2331,12 +2354,16 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 		}
 	},
 	*/
-	/** @private */
+	/* @private */
+	// TODO: PointerLeave event trigger seems has bug in Chrome, ocurrs at some wrong occassion?
+
 	react_pointerleave: function(e)
 	{
+		//console.log('pointer_leave!', e.getTarget(), e.getCurrentTarget());
 		//this._transformInfo.isTransforming = false;
 		this._endInteractTransform();
 	},
+
 	/** @private */
 	/*
 	react_touchleave: function(e)
@@ -2358,6 +2385,7 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 		{
 			//this._transformInfo.isTransforming = false;
 			this._endInteractTransform();
+			//e.preventDefault();
 		}
 	},
 	/** @private */
@@ -2382,7 +2410,14 @@ Kekule.ChemWidget.ViewerBasicInteractionController = Class.create(Kekule.Widget.
 		if (this._transformInfo.isTransforming)
 		{
 			this._interactTransformAtCoord(e.getScreenX(), e.getScreenY());
-			e.preventDefault();
+			try
+			{
+				e.preventDefault();
+			}
+			catch(e)
+			{
+
+			}
 		}
 	},
 	/** @private */
@@ -3011,6 +3046,31 @@ Kekule.ChemWidget.ActionViewerChangeMolDisplayTypeStub = Class.create(Kekule.Che
 	doExecute: function(target)
 	{
 		// do nothing
+	},
+	/** @ignore */
+	doUpdate: function()
+	{
+		this.tryApplySuper('doUpdate');
+		var viewer = this.getDisplayer();
+		this.setEnabled(this.getEnabled() && this._isMolInViewer(viewer));
+	},
+	/** @private */
+	_isMolInViewer: function(viewer)
+	{
+		if (viewer)
+		{
+			var root = viewer.getChemObj();
+			if (!root)
+				return false;
+			else if (root instanceof Kekule.ChemStructureNode)
+				return true;
+			else
+			{
+				var mols = Kekule.ChemStructureUtils.getAllStructFragments(root);
+				return !!(mols && mols.length);
+			}
+		}
+		return false;
 	}
 });
 

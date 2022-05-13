@@ -140,7 +140,6 @@ var Compressor = class {
 	{
 		// dist web pack entrance
 		var lines = [];
-		lines.push('require("./themes/default/kekule.css");');  // TODO: CSS file, currently path is fixed
 		lines.push('module.exports = require(\"./' + compressFileDetails.targetStandaloneFileName + '");');  // kekule.min.js
 		// write to file
 		fs.writeFileSync(path.resolve(destPath, 'kekule.webpack.prod.js'), lines.join('\n'));
